@@ -355,3 +355,17 @@ test('shouldRemindBackup: 10件増えたか30日たったら勧める。あと�
   assert.equal(shouldRemindBackup({ count: 30, lastExportCount: 10, snoozedAt: now - 3 * D, now }), false);
   assert.equal(shouldRemindBackup({ count: 30, lastExportCount: 10, snoozedAt: now - 8 * D, now }), true);
 });
+
+test('isWagashiShop: 屋号らしい名前と cuisine=japanese を拾う', () => {
+  const c = (name, extra = {}) => isWagashiShop({ shop: 'confectionery', name, ...extra });
+  assert.equal(c('うさぎや'), true);
+  assert.equal(c('うさぎや 本店'), true);
+  assert.equal(c('翠江堂'), true);
+  assert.equal(c('千秋庵'), true);
+  assert.equal(c('Usagiya'), false);
+  assert.equal(c('シャトレーゼ'), false);
+  assert.equal(c('ピュール・ド・ソソギ'), false);
+  assert.equal(c('なにか', { cuisine: 'japanese' }), true);
+  assert.equal(c('洋菓子の店', { cuisine: 'japanese' }), false);
+  assert.equal(isWagashiShop({ shop: 'bakery', name: 'うさぎや' }), false);
+});

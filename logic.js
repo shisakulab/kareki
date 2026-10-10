@@ -189,7 +189,11 @@ export function isWagashiShop(tags) {
   if (tags.shop === 'confectionery') {
     if (['wagashi', 'japanese', 'rice_crackers'].includes(tags.confectionery)) return true;
     if (WESTERN_WORDS.some((w) => lower.includes(w.toLowerCase()))) return false;
-    return WAGASHI_WORDS.some((w) => name.includes(w)) || WAGASHI_BRANDS.some((w) => name.includes(w));
+    if (/japanese|wagashi/.test(tags.cuisine || '')) return true; // 「和食系のお菓子屋」と登録されている
+    if (WAGASHI_WORDS.some((w) => name.includes(w)) || WAGASHI_BRANDS.some((w) => name.includes(w))) return true;
+    // 屋号らしい名前（漢字・ひらがなだけで「屋・や・堂・庵・舗・家」で終わる。「うさぎや 本店」は最初の語で見る）
+    const head = name.split(/[\s　（(]/)[0];
+    return /^[\p{Script=Han}\p{Script=Hiragana}々ー]{2,}(屋|や|堂|庵|舗|家)$/u.test(head);
   }
   if (tags.amenity === 'cafe') {
     if (WESTERN_WORDS.some((w) => lower.includes(w.toLowerCase()))) return false;
