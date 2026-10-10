@@ -338,3 +338,13 @@ export function formatOpeningHours(oh) {
     .replace(/\(?"([^"]*)"\)?/g, '（$1）'))
     .join('、');
 }
+
+// 書き出しを勧めるか。前回の書き出しから記録が10件以上増えた、または30日以上たって記録が増えたとき。
+// 「あとで」を押してから7日は出さない
+const DAY_MS = 24 * 60 * 60 * 1000;
+export function shouldRemindBackup({ count, lastExportAt = 0, lastExportCount = 0, snoozedAt = 0, now = Date.now() }) {
+  if (!count || count <= lastExportCount) return false;
+  if (snoozedAt && now - snoozedAt < 7 * DAY_MS) return false;
+  if (count - lastExportCount >= 10) return true;
+  return !!lastExportAt && now - lastExportAt >= 30 * DAY_MS;
+}

@@ -3,7 +3,7 @@ import * as db from './db.js';
 import {
   todayStr, monthKeyOf, yearOf, yearSummary, motifProgress, canonicalMotif, isVerified, sortShopsByDistance,
   groupByDay, clampScore, classicProgress, classicOf, classifyClassic, shopStats, fitSize, shopStamp, monthMotifs,
-  distanceMeters, tilesForBounds, nearestShop, bearingDeg, canCheckIn, shopVisitDays, searchShops, tileKey, formatOpeningHours,
+  distanceMeters, tilesForBounds, nearestShop, bearingDeg, canCheckIn, shopVisitDays, searchShops, tileKey, formatOpeningHours, shouldRemindBackup,
   NEAR_METERS, CHECKIN_METERS, ACCURACY_CAP,
 } from './logic.js';
 
@@ -1004,6 +1004,8 @@ function buildRecord() {
         const cp = classicProgress(state.entries, theme);
         toast(`定番図鑑に『${classicWas.name}』が入りました（${cp.count}/${cp.total}）`);
       }
+      requestPersist();
+      setTimeout(maybeRemindBackup, classicNew ? 2600 : 600);
     } catch (err) {
       toast('保存できませんでした：' + (err && err.message ? err.message : err));
     }
@@ -1065,7 +1067,8 @@ function openSettings() {
   showSheet(openSettings, [bar,
     h('div', { class: 'setrow' },
       h('h3', {}, 'データ'),
-      h('p', { class: 'sub' }, '写真を含めた1つの JSON ファイルです。読み込みは、同じ記録を上書きし、ほかは残します。'),
+      h('p', { class: 'sub' }, '記録はこのスマホのブラウザの中だけにあります。機種変更やブラウザのデータ消去に備えて、ときどき書き出してください（写真を含めた1つの JSON ファイル）。読み込みは、同じ記録を上書きし、ほかは残します。'),
+      h('p', { class: 'sub' }, (() => { const b = backupState(); return b.at ? `前回の書き出し：${todayStr(new Date(b.at))}（${b.count}件）` : 'まだ書き出していません'; })()),
       h('button', { class: 'btn', type: 'button', onclick: exportData }, '書き出す'),
       h('button', { class: 'btn', type: 'button', onclick: () => importIn.click() }, '読み込む'),
       importIn,
@@ -1081,6 +1084,37 @@ function openSettings() {
       h('p', { class: 'sub' }, '菓暦（かれき）は、上生菓子や、どら焼きなど定番の和菓子を食べるたびに記録して、季節と定番の図鑑を埋めるアプリです。データはこの端末のブラウザの中にだけ保存され、外には送りません。'))]);
 }
 
+// ---------- データを守る ----------
+// 書き出した日時と件数（この端末のメモ。読めなくても動く）
+function backupState(update) {
+  let cur = {};
+  try { cur = JSON.parse(localStorage.getItem('kareki.backup') || '{}') || {}; } catch { cur = {}; }
+  if (update) {
+    cur = { ...cur, ...update };
+    try { localStorage.setItem('kareki.backup', JSON.stringify(cur)); } catch { /* 保存できなくても続ける */ }
+  }
+  return cur;
+}
+// ブラウザに「このサイトのデータは消さないで」と頼む（対応していない端末では何もしない）
+async function requestPersist() {
+  try {
+    if (navigator.storage && navigator.storage.persist && !(await navigator.storage.persisted())) await navigator.storage.persist();
+  } catch { /* 対応していなければそのまま */ }
+}
+// 記録が10件増えたか、30日たったら、書き出しを勧める
+function maybeRemindBackup() {
+  const b = backupState();
+  if (!shouldRemindBackup({ count: state.entries.length, lastExportAt: b.at || 0, lastExportCount: b.count || 0, snoozedAt: b.snooze || 0 })) return;
+  showSheet(null, [
+    h('h2', { style: 'font-size:20px;text-align:center;margin:0 0 6px' }, '書き出しておきませんか？'),
+    h('p', { class: 'sub', style: 'text-align:center;margin:0 0 14px' },
+      `記録が ${state.entries.length} 件になりました。データはこのスマホのブラウザの中だけにあるので、機種変更やブラウザのデータ消去に備えて、ファイルに書き出しておくと安心です。`),
+    h('div', { style: 'display:flex;gap:8px;justify-content:center' },
+      h('button', { class: 'btn primary', type: 'button', onclick: async () => { await exportData(); closeSheet(); } }, '書き出す'),
+      h('button', { class: 'btn', type: 'button', onclick: () => { backupState({ snooze: Date.now() }); closeSheet(); } }, 'あとで')),
+  ], () => sheetEl.classList.add('small'));
+}
+
 async function exportData() {
   try {
     const json = await db.exportAll();
@@ -1088,6 +1122,7 @@ async function exportData() {
     document.body.append(a);
     a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    backupState({ at: Date.now(), count: state.entries.length, snooze: 0 });
   } catch (err) {
     toast('書き出せませんでした：' + (err && err.message ? err.message : err));
   }
@@ -1117,6 +1152,7 @@ const record = buildRecord();
   initMap();
   render();
   if (document.visibilityState === 'visible') startWatch();
+  if (state.entries.length) requestPersist(); // 記録がある人は、データを消されにくくする
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }

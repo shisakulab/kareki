@@ -342,3 +342,16 @@ test('shopInfo / formatOpeningHours: OSM の店の情報', async () => {
   assert.equal(formatOpeningHours('Mo-Tu,Th-Su 09:00+ ("closes when sold out!"); We off'), '月〜火・木〜日 09:00〜 （closes when sold out!）、水 定休');
   assert.equal(formatOpeningHours('24/7'), '24時間');
 });
+
+test('shouldRemindBackup: 10件増えたか30日たったら勧める。あとでから7日は出さない', async () => {
+  const { shouldRemindBackup } = await import('../logic.js');
+  const D = 24 * 60 * 60 * 1000, now = 100 * D;
+  assert.equal(shouldRemindBackup({ count: 0, now }), false);
+  assert.equal(shouldRemindBackup({ count: 9, now }), false);
+  assert.equal(shouldRemindBackup({ count: 10, now }), true);
+  assert.equal(shouldRemindBackup({ count: 15, lastExportCount: 10, lastExportAt: now - 5 * D, now }), false);
+  assert.equal(shouldRemindBackup({ count: 11, lastExportCount: 10, lastExportAt: now - 31 * D, now }), true);
+  assert.equal(shouldRemindBackup({ count: 10, lastExportCount: 10, lastExportAt: now - 90 * D, now }), false);
+  assert.equal(shouldRemindBackup({ count: 30, lastExportCount: 10, snoozedAt: now - 3 * D, now }), false);
+  assert.equal(shouldRemindBackup({ count: 30, lastExportCount: 10, snoozedAt: now - 8 * D, now }), true);
+});
