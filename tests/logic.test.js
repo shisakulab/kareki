@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  monthKeyOf, yearSummary, motifProgress, canonicalMotif, distanceMeters, isVerified,
+  monthKeyOf, yearSummary, motifProgress, canonicalMotif, distanceMeters, isVerified, normalizeName, searchShops,
   groupByDay, clampScore, shopStats, sortShopsByDistance, fitSize, shopStamp, monthMotifs,
   isWagashiShop, tileKey, tilesForBounds, nearestShop, bearingDeg, canCheckIn, shopVisitDays,
 } from '../logic.js';
@@ -259,4 +259,22 @@ test('shopStamp: 立ち寄りだけでも判子が押され、二重の縁にな
   assert.deepEqual([s.empty, s.visits, s.glyph, s.verified], [false, 1, '亀', true]);
   assert.equal(s.color, theme.periods[9].color);
   assert.equal(shopStamp(shop, [], theme, [{ shopId: 'other', at: 0 }]).empty, true);
+});
+
+test('normalizeName / searchShops: 表記ゆれをそろえて探し、近い順に並べる', () => {
+  assert.equal(normalizeName(' ふな わ '), 'フナワ');
+  assert.equal(normalizeName('ＡＢＣ・菓子'), 'abc菓子');
+  const shops = [
+    { name: '舟和 本店', lat: 35.7111, lng: 139.7957 },
+    { name: '舟和 仲見世', lat: 35.7130, lng: 139.7960 },
+    { name: '亀十', lat: 35.7106, lng: 139.7967 },
+    { name: 'ゼイタクせんべい', lat: 35.7047, lng: 139.7812 },
+  ];
+  const near = searchShops(shops, '舟和', { lat: 35.7128, lng: 139.7960 });
+  assert.deepEqual(near.map((h) => h.shop.name), ['舟和 仲見世', '舟和 本店']);
+  assert.ok(near[0].distance < near[1].distance);
+  assert.deepEqual(searchShops(shops, 'センベイ').map((h) => h.shop.name), ['ゼイタクせんべい']);
+  assert.equal(searchShops(shops, 'せんべい')[0].distance, null);
+  assert.deepEqual(searchShops(shops, '  '), []);
+  assert.equal(searchShops(shops, '和', null, 1).length, 1);
 });

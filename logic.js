@@ -254,3 +254,23 @@ export function shopVisitDays(entries, visits, shopId) {
   for (const v of visits) if (v.shopId === shopId) days.add(todayStr(new Date(v.at)));
   return days.size;
 }
+
+// 店名の検索用に表記をそろえる：全角・半角（NFKC）、大文字小文字、ひらがな→カタカナ、空白と中黒を除く
+export function normalizeName(s) {
+  return (s || '').normalize('NFKC').toLowerCase()
+    .replace(/[\u3041-\u3096]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60))
+    .replace(/[\s・･]/g, '');
+}
+
+// 店名で探す。pos があれば近い順、なければ名前順。{ shop, distance } の一覧を返す
+export function searchShops(shops, query, pos = null, limit = 50) {
+  const q = normalizeName(query);
+  if (!q) return [];
+  const hits = shops
+    .filter((s) => normalizeName(s.name).includes(q))
+    .map((shop) => ({ shop, distance: pos ? distanceMeters(pos, shop) : null }));
+  hits.sort((a, b) => (a.distance !== null && b.distance !== null
+    ? a.distance - b.distance
+    : a.shop.name.localeCompare(b.shop.name, 'ja')));
+  return hits.slice(0, limit);
+}

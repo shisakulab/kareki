@@ -3,7 +3,7 @@ import * as db from './db.js';
 import {
   todayStr, monthKeyOf, yearOf, yearSummary, motifProgress, canonicalMotif, isVerified, sortShopsByDistance,
   groupByDay, clampScore, shopStats, fitSize, shopStamp, monthMotifs,
-  distanceMeters, tilesForBounds, nearestShop, bearingDeg, canCheckIn, shopVisitDays,
+  distanceMeters, tilesForBounds, nearestShop, bearingDeg, canCheckIn, shopVisitDays, searchShops,
   NEAR_METERS, CHECKIN_METERS, ACCURACY_CAP,
 } from './logic.js';
 
@@ -347,9 +347,10 @@ function initMap() {
   });
 
   mainMap.on('moveend', scheduleOsm);
-  // 指で触れたときだけ「自分で動かした」と数える（開いた直後の自動のズームは数えない）
-  mainMap.getContainer().addEventListener('pointerdown', () => { lastUserMove = Date.now(); });
-  mainMap.getContainer().addEventListener('wheel', () => { lastUserMove = Date.now(); }, { passive: true });
+  // 指で地図を動かしたら、自分についていくのをやめる（現在地ボタンでまた始める）
+  mainMap.on('dragstart', () => setFollow(false));
+  mainMap.getContainer().addEventListener('wheel', () => setFollow(false), { passive: true });
+  mainMap.getContainer().addEventListener('touchstart', (e) => { if (e.touches.length > 1) setFollow(false); }, { passive: true });
   mainMap.on('click', closeCard);
   mainMap.on('contextmenu', async (ev) => {
     const name = (prompt('この場所に店を追加します。店名は？') || '').trim();
@@ -546,14 +547,28 @@ function openVisited(shop, n) {
 // ---------- 近づいたら知らせる（開いているあいだだけ位置を追う） ----------
 let watchId = null;
 let nearSig = '';
-// 歩いているあいだは地図が自分についてくる。自分で地図を動かしたら 15 秒は止める。シートが開いているときも動かさない
-let lastUserMove = 0;
+// 歩いているあいだは地図が自分についてくる。指で地図を動かしたら止め、現在地ボタンでまた始める。シートが開いているときは動かさない
+const locateEl = document.getElementById('locate');
+let follow = true;
+function setFollow(on) {
+  follow = on;
+  locateEl.classList.toggle('on', on);
+}
+locateEl.addEventListener('click', async () => {
+  closeCard();
+  const pos = state.pos && Date.now() - state.posAt < 20000 ? state.pos : await getPos(8000);
+  if (!pos) { toast('今いる場所を取得できませんでした（位置情報の許可を確かめてください）'); return; }
+  setFollow(true);
+  setPosDot(pos);
+  if (mainMap) mainMap.setView([pos.lat, pos.lng], Math.max(mainMap.getZoom(), 16), { animate: !reduceMotion() });
+  startWatch();
+});
 function onWatch(p) {
   state.pos = { lat: p.coords.latitude, lng: p.coords.longitude };
   state.acc = p.coords.accuracy;
   state.posAt = Date.now();
   setPosDot(state.pos);
-  if (mainMap && Date.now() - lastUserMove > 15000 && sheetEl.hidden && !checking) {
+  if (mainMap && follow && sheetEl.hidden && !checking) {
     mainMap.panTo([state.pos.lat, state.pos.lng], { animate: !reduceMotion() });
   }
   updateNear();
@@ -574,10 +589,57 @@ document.addEventListener('visibilitychange', () => {
 
 function focusShop(t) {
   if (!mainMap) return;
+  setFollow(false); // 店を見ているあいだは自分の位置に引き戻さない
   mainMap.setView([t.lat, t.lng], Math.max(mainMap.getZoom(), 16), { animate: !reduceMotion() });
   const reg = registeredOf(t);
   if (reg) showCard(reg);
   else showOsmCard(t);
+}
+
+// ---------- 店を探す ----------
+// 自分の店（閉店にした店は除く）と、全国の和菓子屋データから店名で探す。初回だけ全区画（約100KB）を読み込む
+let allTilesReady = null;
+function loadAllTiles() {
+  if (!allTilesReady) {
+    allTilesReady = fetch('data/shops/meta.json')
+      .then((r) => r.json())
+      .then((meta) => ensureTiles(meta.tiles))
+      .catch(() => { allTilesReady = null; });
+  }
+  return allTilesReady;
+}
+function searchPool() {
+  const reg = registeredOsmIds();
+  const all = [...tiles.values()].flat().filter((s) => !reg.has(s.osmId));
+  return [...state.shops.filter((s) => !s.closed), ...all];
+}
+document.getElementById('search').addEventListener('click', () => { closeCard(); openSearch(); });
+function openSearch(initial = '') {
+  const input = h('input', { class: 'searchbox', type: 'search', placeholder: '店名で探す（例：舟和、せんべい）', value: initial, enterkeyhint: 'search', autocomplete: 'off' });
+  const status = h('p', { class: 'sub' }, '');
+  const list = h('ul', { class: 'list results' });
+  const render = () => {
+    const q = input.value;
+    if (!q.trim()) { list.replaceChildren(); status.textContent = ready ? '和菓子屋の名前を入れてください' : '読み込んでいます…'; return; }
+    const hits = searchShops(searchPool(), q, state.pos);
+    status.textContent = hits.length ? `${hits.length === 50 ? '50件以上' : hits.length + '件'}${state.pos ? '（近い順）' : ''}`
+      : ready ? '見つかりませんでした（地図を長押しすると店を追加できます）' : '読み込んでいます…';
+    list.replaceChildren(...hits.map(({ shop, distance }) => {
+      const days = shop.id ? shopVisitDays(state.entries, state.visits, shop.id) : 0;
+      return h('li', {}, h('button', {
+        type: 'button',
+        onclick: () => { closeSheet(); focusShop(shop); },
+      },
+      h('span', { class: 'rn' }, shop.name),
+      h('span', { class: 'rd' }, [days ? `判子 ${days}` : null, distance === null ? null : fmtDist(distance)].filter(Boolean).join(' ・ '))));
+    }));
+  };
+  input.addEventListener('input', render);
+  showSheet(() => openSearch(input.value), [h('h1', { style: 'font-size:22px;margin:4px 0 12px' }, '店を探す'), input, status, list],
+    () => setTimeout(() => input.focus(), 50));
+  let ready = false;
+  render();
+  loadAllTiles().then(() => { ready = true; render(); });
 }
 
 // 300m 以内でいちばん近い店（自分の店と OSM の店。閉店にした店は除く）を、お題のカードの下に出す
