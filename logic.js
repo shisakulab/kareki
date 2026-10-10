@@ -274,3 +274,37 @@ export function searchShops(shops, query, pos = null, limit = 50) {
     : a.shop.name.localeCompare(b.shop.name, 'ja')));
   return hits.slice(0, limit);
 }
+
+// ---------- v1.3 定番の和菓子の図鑑 ----------
+// 品名に定番の name / aliases が含まれていれば、その key。複数当たれば、いちばん長い語を優先。なければ null
+export function classifyClassic(sweetName, theme) {
+  const t = normalizeName(sweetName);
+  if (!t || !theme || !theme.classics) return null;
+  let best = null;
+  let bestLen = 0;
+  for (const c of theme.classics) {
+    for (const w of [c.name, ...(c.aliases || [])]) {
+      const n = normalizeName(w);
+      if (n && t.includes(n) && n.length > bestLen) { best = c.key; bestLen = n.length; }
+    }
+  }
+  return best;
+}
+
+// 記録の定番：手で決めた値（null＝定番ではない）があればそれ、なければ自動で振り分ける
+export function classicOf(entry, theme) {
+  return entry.classic !== undefined ? entry.classic : classifyClassic(entry.sweetName, theme);
+}
+
+// 集めた定番の数・合計・定番ごとの件数と、点数がいちばん高い記録
+export function classicProgress(entries, theme) {
+  const list = (theme.classics || []).map((c) => ({ key: c.key, name: c.name, count: 0, best: null }));
+  const byKey = new Map(list.map((c) => [c.key, c]));
+  for (const e of entries) {
+    const cell = byKey.get(classicOf(e, theme));
+    if (!cell) continue;
+    cell.count++;
+    if (!cell.best || scoreRank(e) > scoreRank(cell.best)) cell.best = e;
+  }
+  return { count: list.filter((c) => c.count > 0).length, total: list.length, classics: list };
+}

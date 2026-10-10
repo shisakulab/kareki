@@ -4,6 +4,7 @@ import {
   monthKeyOf, yearSummary, motifProgress, canonicalMotif, distanceMeters, isVerified, normalizeName, searchShops,
   groupByDay, clampScore, shopStats, sortShopsByDistance, fitSize, shopStamp, monthMotifs,
   isWagashiShop, tileKey, tilesForBounds, nearestShop, bearingDeg, canCheckIn, shopVisitDays,
+  classifyClassic, classicOf, classicProgress,
 } from '../logic.js';
 import theme from '../themes/jonamagashi.js';
 
@@ -277,4 +278,55 @@ test('normalizeName / searchShops: 表記ゆれをそろえて探し、近い順
   assert.equal(searchShops(shops, 'せんべい')[0].distance, null);
   assert.deepEqual(searchShops(shops, '  '), []);
   assert.equal(searchShops(shops, '和', null, 1).length, 1);
+});
+
+test('定番：30種・key 重複なし・語が別の定番にまたがらない', () => {
+  assert.equal(theme.classics.length, 30);
+  assert.equal(new Set(theme.classics.map((c) => c.key)).size, 30);
+  // 正規化すると同じになる語は同じ定番の中だけ（別の定番にまたがらない）
+  const owner = new Map();
+  for (const c of theme.classics) for (const w of [c.name, ...c.aliases]) {
+    const k = normalizeName(w);
+    assert.ok(!owner.has(k) || owner.get(k) === c.key, w);
+    owner.set(k, c.key);
+  }
+});
+
+test('classifyClassic: 表の代表的な品名', () => {
+  const cases = {
+    '三笠': 'dorayaki', '苺大福': 'ichigodaifuku', '芋羊羹': 'imoyokan', '生八ツ橋': 'yatsuhashi', '御座候': 'imagawayaki',
+    'みたらし団子': 'dango', '水ようかん': 'mizuyokan', '栗まんじゅう': 'kurimanju', '酒饅頭': 'sakemanju', '豆大福': 'mamedaifuku',
+    '草餅': 'kusamochi', '長命寺': 'sakuramochi', 'かすてら': 'kasutera', '餡蜜': 'anmitsu', '鯛焼き': 'taiyaki', '落雁': 'rakugan',
+  };
+  for (const [name, key] of Object.entries(cases)) assert.equal(classifyClassic(name, theme), key, name);
+});
+
+test('classifyClassic: 長い語を優先・ひらがなカタカナ・当たらない', () => {
+  assert.equal(classifyClassic('いちご大福', theme), 'ichigodaifuku');
+  assert.equal(classifyClassic('栗饅頭', theme), 'kurimanju');
+  assert.equal(classifyClassic('ドラヤキ', theme), 'dorayaki');
+  assert.equal(classifyClassic('どら焼き（粒あん）', theme), 'dorayaki');
+  assert.equal(classifyClassic('栗きんとん', theme), null);
+  assert.equal(classifyClassic('', theme), null);
+});
+
+test('classicOf: 自動・手で null・手で選んだ key', () => {
+  assert.equal(classicOf({ sweetName: 'どら焼き' }, theme), 'dorayaki');
+  assert.equal(classicOf({ sweetName: 'どら焼き', classic: null }, theme), null);
+  assert.equal(classicOf({ sweetName: 'どら焼き', classic: 'manju' }, theme), 'manju');
+});
+
+test('classicProgress: 同じ定番は1種、定番でない記録は数えない', () => {
+  const es = [
+    { date: '2026-01-01', sweetName: 'どら焼き', score: 3 },
+    { date: '2026-02-01', sweetName: '三笠', score: 4.5 },
+    { date: '2026-03-01', sweetName: '大福', classic: null, score: 5 },
+    { date: '2026-03-02', sweetName: '栗きんとん', score: 5 },
+  ];
+  const p = classicProgress(es, theme);
+  assert.equal(p.count, 1);
+  assert.equal(p.total, 30);
+  const d = p.classics.find((c) => c.key === 'dorayaki');
+  assert.equal(d.count, 2);
+  assert.equal(d.best.sweetName, '三笠');
 });

@@ -1,7 +1,7 @@
 {
   "name": "菓暦",
   "short_name": "菓暦",
-  "description": "上生菓子の季節図鑑。食べるたびに記録して12か月の図鑑を埋める",
+  "description": "上生菓子と、どら焼きなど定番の和菓子の図鑑。食べるたびに記録して埋める",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

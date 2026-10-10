@@ -2,7 +2,7 @@ import theme from './themes/jonamagashi.js';
 import * as db from './db.js';
 import {
   todayStr, monthKeyOf, yearOf, yearSummary, motifProgress, canonicalMotif, isVerified, sortShopsByDistance,
-  groupByDay, clampScore, shopStats, fitSize, shopStamp, monthMotifs,
+  groupByDay, clampScore, classicProgress, classicOf, classifyClassic, shopStats, fitSize, shopStamp, monthMotifs,
   distanceMeters, tilesForBounds, nearestShop, bearingDeg, canCheckIn, shopVisitDays, searchShops,
   NEAR_METERS, CHECKIN_METERS, ACCURACY_CAP,
 } from './logic.js';
@@ -24,7 +24,7 @@ const sheetBody = document.getElementById('sheetbody');
 const grabEl = document.getElementById('grab');
 const toastEl = document.getElementById('toast');
 
-const state = { year: new Date().getFullYear(), shops: [], entries: [], visits: [], pos: null, acc: null, posAt: 0, maps: [] };
+const state = { zukanTab: 'season', year: new Date().getFullYear(), shops: [], entries: [], visits: [], pos: null, acc: null, posAt: 0, maps: [] };
 const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const period = (key) => theme.periods.find((p) => p.key === key);
@@ -229,8 +229,16 @@ function openZukan() {
       h('button', { class: 'ibtn', type: 'button', 'aria-label': '次の年', onclick: () => { state.year++; openZukan(); } }, '›')),
     h('button', { class: 'ibtn', type: 'button', 'aria-label': '設定', onclick: openSettings }, '⚙'));
 
+  const cprog = classicProgress(state.entries, theme);
+  const tabs = h('div', { class: 'tabs', role: 'tablist' }, [['season', '季節'], ['classic', '定番']].map(([k, label]) =>
+    h('button', {
+      class: 'tab' + (state.zukanTab === k ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': String(state.zukanTab === k),
+      onclick: () => { state.zukanTab = k; openZukan(); },
+    }, label)));
+
   const achv = h('div', { class: 'achv' },
     h('span', {}, isThisYear ? '今年 ' : `${state.year}年 `, h('b', {}, `${sum.filled}/12`), ' か月'),
+    h('span', {}, '定番 ', h('b', {}, `${cprog.count}/${cprog.total}`)),
     h('span', {}, 'モチーフ 通算 ', h('b', {}, `${prog.count}/${prog.total}`)),
     h('span', {}, '立ち寄った店 ', h('b', {}, new Set(state.visits.map((v) => v.shopId).filter(shopOf)).size), ' 軒'));
 
@@ -252,7 +260,39 @@ function openZukan() {
     return h('button', { class: cls.join(' '), type: 'button', style: `--c:${p.color}`, onclick: () => openMonth(state.year, c.key, openZukan) }, kids);
   }));
 
-  showSheet(openZukan, [bar, achv, grid]);
+  const cgrid = h('div', { class: 'grid' }, cprog.classics.map((c) => {
+    const cls = ['cell', 'classic'];
+    const kids = [];
+    if (c.count > 0) {
+      cls.push('filled');
+      if (c.best.photoId) { cls.push('photo'); kids.push(imgFor(c.best.photoId, '')); }
+      kids.push(h('div', { class: 'mo' }, c.name));
+      if (!c.best.photoId) kids.push(h('div', { class: 'nm' }, c.best.sweetName));
+      kids.push(h('div', { class: 'stamp' + (c.best.verified ? ' ring' : '') }, c.count));
+    } else {
+      kids.push(h('div', { class: 'mt' }, c.name));
+    }
+    return h('button', { class: cls.join(' '), type: 'button', style: '--c:#c0527a', onclick: () => openClassic(c.key) }, kids);
+  }));
+
+  // 年の切り替えは季節のときだけ
+  if (state.zukanTab === 'classic') bar.querySelector('.grow').replaceChildren(h('h1', { style: 'display:inline;font-size:22px' }, '定番'));
+  showSheet(openZukan, [bar, tabs, achv, state.zukanTab === 'classic' ? cgrid : grid]);
+}
+
+// 定番ひとつの記録の一覧
+function openClassic(key) {
+  const c = theme.classics.find((x) => x.key === key);
+  const list = state.entries.filter((e) => classicOf(e, theme) === key)
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : (b.createdAt || 0) - (a.createdAt || 0)));
+  const bar = h('div', { class: 'bar' },
+    h('button', { class: 'ibtn', type: 'button', 'aria-label': '戻る', onclick: openZukan }, '‹'),
+    h('h2', { class: 'grow' }, c.name),
+    h('span', { style: 'width:44px' }));
+  const recs = list.length
+    ? h('ul', { class: 'list' }, list.map((e) => h('li', {}, recRow(e, true))))
+    : h('p', { class: 'muted' }, 'まだ記録がありません');
+  showSheet(() => openClassic(key), [bar, h('h3', {}, '記録'), recs]);
 }
 
 // back：戻るボタンで開く画面（省略なら閉じる）。intro：先頭に出す一言の説明
@@ -762,7 +802,7 @@ function drawMinis(mini) {
 
 // ---------- 記録する ----------
 function buildRecord() {
-  const f = { file: null, previewUrl: null, newPoint: null };
+  const f = { file: null, previewUrl: null, newPoint: null, classic: undefined, picking: false };
   let pickMap = null;
   let pickMarker = null;
 
@@ -782,7 +822,7 @@ function buildRecord() {
   album.addEventListener('change', () => { setFile(album.files[0]); album.value = ''; });
   clearPhoto.addEventListener('click', () => setFile(null));
 
-  const sweet = h('input', { type: 'text', placeholder: '例：桜餅の練り切り', autocomplete: 'off', enterkeyhint: 'next' });
+  const sweet = h('input', { type: 'text', placeholder: '例：どら焼き、栗きんとん', autocomplete: 'off', enterkeyhint: 'next' });
   const shopSel = h('select', { 'aria-label': '店' });
   const newName = h('input', { type: 'text', placeholder: '新しい店の名前', autocomplete: 'off' });
   const pickEl = h('div', { class: 'pickmap' });
@@ -801,6 +841,24 @@ function buildRecord() {
     h('label', { class: 'check' }, noScore, '点数をつけない'));
   const note = h('textarea', { placeholder: '感想（任意）', rows: 3 });
   const save = h('button', { class: 'btn primary', type: 'button' }, '記録する');
+
+  // 定番：品名から自動（f.classic が undefined）か、手で選んだ値（null＝定番ではない）
+  const classicBox = h('div', { class: 'classicBox' });
+  const currentClassic = () => (f.classic !== undefined ? f.classic : classifyClassic(sweet.value, theme));
+  function renderClassic() {
+    const cur = currentClassic();
+    const c = cur ? theme.classics.find((x) => x.key === cur) : null;
+    const label = c ? `定番：${c.name}` : (f.classic === null ? '定番：なし' : '定番：—（選ぶ）');
+    const nodes = [h('button', { class: 'chip classicChip' + (c ? ' on' : ''), type: 'button', style: '--c:#c0527a', onclick: () => { f.picking = !f.picking; renderClassic(); } }, label)];
+    if (f.picking) {
+      const pick = (v) => { f.classic = v; f.picking = false; renderClassic(); };
+      nodes.push(h('div', { class: 'chips classicList' },
+        theme.classics.map((x) => h('button', { class: 'chip' + (cur === x.key ? ' on' : ''), type: 'button', style: '--c:#c0527a', onclick: () => pick(x.key) }, x.name)),
+        h('button', { class: 'chip' + (f.classic === null ? ' on' : ''), type: 'button', style: '--c:#7f8b99', onclick: () => pick(null) }, '定番ではない')));
+    }
+    classicBox.replaceChildren(...nodes);
+  }
+  sweet.addEventListener('input', renderClassic);
 
   const monthPeriod = () => period(monthKeyOf(dateIn.value || todayStr()));
   function renderChips() {
@@ -867,7 +925,7 @@ function buildRecord() {
 
   function reset() {
     setFile(null);
-    sweet.value = ''; motifIn.value = ''; note.value = ''; newName.value = '';
+    sweet.value = ''; f.classic = undefined; f.picking = false; renderClassic(); motifIn.value = ''; note.value = ''; newName.value = '';
     dateIn.value = todayStr();
     noScore.checked = false; range.value = 30;
     f.newPoint = null;
@@ -902,10 +960,13 @@ function buildRecord() {
         id: db.newId(), date: dateIn.value, shopId: shop ? shop.id : null, sweetName,
         motif: canonicalMotif(motifIn.value, theme),
         score: noScore.checked ? null : clampScore(Number(range.value) / 10),
+        classic: f.classic !== undefined ? f.classic : classifyClassic(sweetName, theme),
         note: note.value.trim(), photoId, verified: isVerified(pos, shop), createdAt: Date.now(),
       };
       await db.put('entries', entry);
       const key = monthKeyOf(entry.date);
+      const classicWas = entry.classic ? classicProgress(state.entries, theme).classics.find((c) => c.key === entry.classic) : null;
+      const classicNew = !!(classicWas && classicWas.count === 0);
       const wasGot = monthMotifs(state.entries, theme, yearOf(entry.date), key).motifs.some((m) => m.name === entry.motif && m.got);
       await loadData();
       reset();
@@ -916,6 +977,10 @@ function buildRecord() {
       const isMotif = period(key).motifs.includes(entry.motif);
       if (!inThisMonth) drawQuest();
       await celebrate(shop, inThisMonth && isMotif && !wasGot ? entry.motif : null);
+      if (classicNew) {
+        const cp = classicProgress(state.entries, theme);
+        toast(`定番図鑑に『${classicWas.name}』が入りました（${cp.count}/${cp.total}）`);
+      }
     } catch (err) {
       toast('保存できませんでした：' + (err && err.message ? err.message : err));
     }
@@ -928,10 +993,10 @@ function buildRecord() {
       h('button', { class: 'btn', type: 'button', onclick: () => cam.click() }, 'カメラで撮る'),
       h('button', { class: 'btn', type: 'button', onclick: () => album.click() }, 'アルバムから'),
       preview, clearPhoto), cam, album),
-    h('label', { class: 'f' }, '品名（必須）', sweet),
+    h('div', { class: 'f' }, h('label', { class: 'f' }, '品名（必須）', sweet), classicBox),
     h('label', { class: 'f' }, '店', shopSel), newBox,
     h('label', { class: 'f' }, '日付', dateIn),
-    h('div', { class: 'f' }, h('label', { class: 'f' }, 'モチーフ', motifIn), chips),
+    h('div', { class: 'f' }, h('label', { class: 'f' }, '今月のお題（上生菓子のとき）', motifIn), chips),
     h('div', { class: 'f' }, '点数（0.0〜5.0）', scoreBox),
     h('label', { class: 'f' }, '感想', note),
     save);
@@ -990,7 +1055,7 @@ function openSettings() {
         '（ODbL）。名前から和菓子屋らしい店を選んでいるので、違う店や抜けがあります。')),
     h('div', { class: 'setrow' },
       h('h3', {}, 'このアプリについて'),
-      h('p', { class: 'sub' }, '菓暦（かれき）は、上生菓子を食べるたびに記録して12か月の図鑑を埋めるアプリです。データはこの端末のブラウザの中にだけ保存され、外には送りません。'))]);
+      h('p', { class: 'sub' }, '菓暦（かれき）は、上生菓子や、どら焼きなど定番の和菓子を食べるたびに記録して、季節と定番の図鑑を埋めるアプリです。データはこの端末のブラウザの中にだけ保存され、外には送りません。'))]);
 }
 
 async function exportData() {
