@@ -1014,7 +1014,8 @@ function buildRecord() {
       } else if (shopSel.value) {
         shop = shopOf(shopSel.value);
       }
-      const pos = shop ? await getPos(4000) : null;
+      // 店で入力しているあいだは立ち止まっていることが多いので、2分以内に取れた位置があればそれを使う（測り直すと保存が数秒止まる）
+      const pos = shop ? (state.pos && Date.now() - state.posAt < 120000 ? state.pos : await getPos(4000)) : null;
       let photoId = null;
       if (f.file) {
         photoId = db.newId();
