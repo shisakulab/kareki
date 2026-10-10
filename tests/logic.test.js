@@ -369,3 +369,7 @@ test('isWagashiShop: 屋号らしい名前と cuisine=japanese を拾う', () =>
   assert.equal(c('洋菓子の店', { cuisine: 'japanese' }), false);
   assert.equal(isWagashiShop({ shop: 'bakery', name: 'うさぎや' }), false);
 });
+
+test('テーマ：60のモチーフすべてに一言の説明がある', () => {
+  for (const m of theme.periods.flatMap((p) => p.motifs)) assert.ok(theme.hints[m], m);
+});

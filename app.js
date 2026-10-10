@@ -311,11 +311,23 @@ function openMonth(year, key, back = closeSheet, intro = null) {
     ? h('ul', { class: 'list' }, list.map((e) => h('li', {}, recRow(e, true))))
     : h('p', { class: 'muted' }, 'まだ記録がありません');
 
+  const hints = theme.hints || {};
   const motifs = h('div', { class: 'motifs', style: `--c:${p.color}` }, p.motifs.map((m) =>
     h('div', { class: 'motif' + (names[m] ? ' got' : '') }, (names[m] ? '✓ ' : '') + m,
-      names[m] ? h('small', {}, names[m]) : null)));
+      names[m] ? h('small', {}, names[m]) : null,
+      hints[m] ? h('span', { class: 'hint' }, hints[m]) : null)));
+  // お題の遊び方（いつでも開ける。初めてのときは開いた状態）
+  const howto = h('details', { class: 'howto', open: !!intro },
+    h('summary', {}, 'お題の遊び方'),
+    h('ul', {},
+      h('li', {}, '上生菓子は、季節の花や行事を、練り切りなどの形と色で表したお菓子です。和菓子屋は月ごとに品を入れ替えるので、その月にしか出会えない菓子があります。'),
+      h('li', {}, 'お題は、その月に和菓子屋で出会いやすい5つの題材です。'),
+      h('li', {}, '当てはまる上生菓子を見つけたら、記録するときにお題を選びます。判子が押され、5つそろうと「満願」です。'),
+      h('li', {}, '菓子の名前（菓銘）は店ごとに違います。「乱菊」「着せ綿」など名前が違っても、菊をかたどっていれば「菊」です。栗や柿のように、素材そのものがお題のこともあります。'),
+      h('li', {}, '月が替わるとお題も替わります。前の月の分は、図鑑の「季節」で振り返れます。'),
+      h('li', {}, 'お題に合うかどうかは、自分で決めて大丈夫です。')));
 
-  showSheet(() => openMonth(year, key, back), [bar, intro ? h('p', { class: 'intro' }, intro) : null, h('h3', {}, '記録'), recs, h('h3', { style: 'margin-bottom:8px' }, 'モチーフ'), motifs].filter(Boolean));
+  showSheet(() => openMonth(year, key, back), [bar, howto, h('h3', {}, '記録'), recs, h('h3', { style: 'margin-bottom:8px' }, 'モチーフ'), motifs].filter(Boolean));
 }
 
 // 記録1件の行。withDelete なら削除ボタン付き
