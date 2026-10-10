@@ -35,6 +35,7 @@ python -m http.server
 
 ## クレジット
 - 地図タイル：[国土地理院](https://maps.gsi.go.jp/development/ichiran.html)（淡色地図）
+- 店の住所（町名まで）：[国土地理院](https://maps.gsi.go.jp/)の逆ジオコーダーで、店の位置から調べたもの
 - 和菓子屋の位置：© [OpenStreetMap contributors](https://www.openstreetmap.org/copyright)（[ODbL](https://opendatacommons.org/licenses/odbl/1-0/)）
 - 地図表示：[Leaflet](https://leafletjs.com/) 1.9.4（BSD-2-Clause、`vendor/` に同梱。ライセンスは `vendor/LICENSE-leaflet.txt`）
 

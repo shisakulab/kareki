@@ -234,6 +234,7 @@ body.hasnear .leaflet-top.leaflet-right { top: calc(var(--safe-t) + 196px); }
 .bignum { font-family: var(--serif); font-size: 44px; line-height: 1.1; text-align: center; }
 .scorebox input[type=range] { width: 100%; height: 44px; accent-color: var(--accent); }
 .scorebox.off .bignum, .scorebox.off input { opacity: .35; }
+.scorebox .shint { font-size: 12px; opacity: .7; }
 .check { display: flex; align-items: center; gap: 8px; min-height: 44px; color: var(--ink); }
 .check input { width: 22px; height: 22px; }
 .newshop { border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: grid; gap: 8px; background: var(--card); }
@@ -260,9 +261,18 @@ body.hasnear .leaflet-top.leaflet-right { top: calc(var(--safe-t) + 196px); }
 }
 .locate.on { background: var(--accent); border-color: #fff; color: #fff; }
 .locate.search { bottom: calc(var(--safe-b) + 88px); }
+/* 幅の狭いスマホ：丸いボタンの列を詰めて、右下のボタンと重ならないようにする */
+@media (max-width: 400px) {
+  .fab { gap: 12px; padding-right: 40px; }
+  .rbtn { width: 50px; height: 50px; font-size: 13px; }
+  .rbtn.main { width: 64px; height: 64px; }
+  .locate { right: 8px; width: 44px; height: 44px; }
+}
 .searchbox { width: 100%; font-size: 17px; padding: 12px 14px; border-radius: 12px; border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink); margin-bottom: 10px; }
 .results li button { width: 100%; text-align: left; display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font: inherit; min-height: 48px; }
+.results .rl { min-width: 0; display: grid; }
 .results .rn { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.results .ra { font-size: 12px; opacity: .7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .results .rd { flex: none; font-size: 13px; opacity: .7; }
 
 /* シート */
@@ -312,3 +322,11 @@ body.hasnear .leaflet-top.leaflet-right { top: calc(var(--safe-t) + 196px); }
 .howto summary { font-weight: 700; cursor: pointer; min-height: 28px; }
 .howto ul { margin: 8px 0 0; padding-left: 1.2em; display: grid; gap: 6px; font-size: 14px; line-height: 1.6; }
 .motif .hint { display: block; font-size: 12px; line-height: 1.45; opacity: .75; margin-top: 4px; font-weight: 400; }
+.shopcard .addr { margin: 2px 0 4px; font-size: 13px; opacity: .8; }
+.welcome { margin: 0 0 8px; padding-left: 1.2em; display: grid; gap: 8px; line-height: 1.6; }
+
+/* 写真の判子：撮った写真を丸く切り抜き、季節の色の縁を付ける */
+.hanko.photo .face { background: #fff; -webkit-mask-image: none; mask-image: none; overflow: hidden; box-shadow: 0 0 0 3px var(--c), 0 0 0 5px #fff; }
+.hanko.photo.dbl .face { box-shadow: 0 0 0 3px var(--c), 0 0 0 5px #fff, 0 0 0 7px var(--c); }
+.hanko .face img, .slot .dot img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; }
+.slot.photo .dot { overflow: hidden; padding: 0; background: #fff; }

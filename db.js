@@ -66,7 +66,11 @@ export async function importAll(json) {
   for (const s of json.shops) await put('shops', s);
   for (const e of json.entries) await put('entries', e);
   for (const v of json.visits || []) await put('visits', v); // v1 の書き出しには無い
-  for (const p of json.photos || []) await put('photos', { id: p.id, blob: await dataURLToBlob(p.data) });
+  for (const p of json.photos || []) {
+    // 画像の data URL だけを受け付ける（それ以外の URL を読みに行かない）
+    if (typeof p.data !== 'string' || !/^data:image\/(jpeg|png|webp|gif);base64,/.test(p.data)) continue;
+    await put('photos', { id: p.id, blob: await dataURLToBlob(p.data) });
+  }
 }
 
 export async function clearAll() {

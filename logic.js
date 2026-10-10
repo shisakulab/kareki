@@ -137,6 +137,7 @@ export function shopStamp(shop, entries, theme, visits = []) {
   return {
     empty: false, visits: shopVisitDays(entries, visits, shop.id), color: p ? p.color : null, glyph: [...text][0] || '',
     verified: myVisits.length > 0 || st.entries.some((e) => e.verified),
+    photoId: latestPhotoId(st.entries), // その店で最後に撮った写真（判子の中に入れる）
   };
 }
 
@@ -150,7 +151,8 @@ export function monthMotifs(entries, theme, year, key) {
     const m = canonicalMotif(e.motif, theme);
     if (m) got.add(m);
   }
-  const motifs = p.motifs.map((name) => ({ name, got: got.has(name) }));
+  const photoOf = (name) => latestPhotoId(entries.filter((e) => yearOf(e.date) === year && monthKeyOf(e.date) === key && canonicalMotif(e.motif, theme) === name));
+  const motifs = p.motifs.map((name) => ({ name, got: got.has(name), photoId: got.has(name) ? photoOf(name) : null }));
   const count = motifs.filter((m) => m.got).length;
   return { motifs, count, total: motifs.length, done: count === motifs.length };
 }
@@ -351,4 +353,14 @@ export function shouldRemindBackup({ count, lastExportAt = 0, lastExportCount = 
   if (snoozedAt && now - snoozedAt < 7 * DAY_MS) return false;
   if (count - lastExportCount >= 10) return true;
   return !!lastExportAt && now - lastExportAt >= 30 * DAY_MS;
+}
+
+// 写真のある記録のうち、いちばん新しいものの写真（日付、同じ日なら記録した順）。なければ null
+export function latestPhotoId(entries) {
+  let best = null;
+  for (const e of entries) {
+    if (!e.photoId) continue;
+    if (!best || e.date > best.date || (e.date === best.date && (e.createdAt || 0) > (best.createdAt || 0))) best = e;
+  }
+  return best ? best.photoId : null;
 }

@@ -1,6 +1,6 @@
 // キャッシュ優先。ファイルを変えたら VERSION を上げる
 // Leaflet は vendor/ に同梱。地図タイルはキャッシュしない。data/shops/ は取得時にキャッシュ
-const VERSION = 'kareki-v11';
+const VERSION = 'kareki-v14';
 const FILES = [
   './',
   './index.html',
@@ -18,7 +18,10 @@ const FILES = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
+  // cache: 'reload' で、ブラウザに一時保存された古いファイルではなく、必ずサーバーから取り直す
+  e.waitUntil(caches.open(VERSION)
+    .then((c) => c.addAll(FILES.map((u) => new Request(u, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -34,7 +37,7 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   // 店のデータ（data/shops/）は、取得したときにキャッシュする
   if (url.origin === self.location.origin && url.pathname.includes('/data/shops/')) {
-    e.respondWith(caches.match(e.request).then((hit) => hit || fetch(e.request).then((res) => {
+    e.respondWith(caches.match(e.request).then((hit) => hit || fetch(e.request, { cache: 'reload' }).then((res) => {
       if (res.ok) { const copy = res.clone(); caches.open(VERSION).then((c) => c.put(e.request, copy)); }
       return res;
     })));

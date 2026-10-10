@@ -367,11 +367,12 @@ function closeCard() { if (card) { card.remove(); card = null; } }
 
 function hankoIcon(shop) {
   const s = shopStamp(shop, state.entries, theme, state.visits);
-  const cls = 'hanko' + (s.empty ? ' empty' : '') + (s.verified ? ' dbl' : '');
+  const cls = 'hanko' + (s.empty ? ' empty' : '') + (s.verified ? ' dbl' : '') + (s.photoId ? ' photo' : '');
   const node = s.empty
     ? h('div', { class: cls })
     : h('div', { class: cls, style: `--c:${s.color || NEUTRAL}` },
-      h('div', { class: 'face' }, h('span', { class: 'g' }, s.glyph)),
+      // 写真があれば、その店で最後に撮った写真を丸く入れる。なければ字の判子
+      h('div', { class: 'face' }, s.photoId ? imgFor(s.photoId, '') : h('span', { class: 'g' }, s.glyph)),
       s.visits >= 2 ? h('span', { class: 'cnt' }, s.visits) : null);
   return L.divIcon({ className: 'hanko-wrap', html: node, iconSize: [44, 44], iconAnchor: [22, 22] });
 }
@@ -391,12 +392,6 @@ function initMap() {
   if (state.shops.length) mainMap.fitBounds(L.latLngBounds(state.shops.map((s) => [s.lat, s.lng])).pad(0.3), { maxZoom: 16 });
   else mainMap.setView([TOKYO.lat, TOKYO.lng], 14);
 
-  getPos().then((pos) => {
-    if (!pos) return;
-    mainMap.setView([pos.lat, pos.lng], 15);
-    setPosDot(pos);
-    updateNear();
-  });
 
   mainMap.on('moveend', scheduleOsm);
   // 指で地図を動かしたら、自分についていくのをやめる（現在地ボタンでまた始める）
@@ -448,8 +443,33 @@ function showCard(shop) {
     h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
       h('button', { class: 'btn primary', type: 'button', onclick: () => { record.setShop(shop.id); closeCard(); openRecord(); } }, 'ここで記録する'),
       h('button', { class: 'btn', type: 'button', onclick: () => checkIn(shop) }, '立ち寄る'),
+      shop.osmId ? null : h('button', { class: 'btn', type: 'button', onclick: () => renameShop(shop) }, '名前を直す'),
+      shop.osmId ? null : h('button', { class: 'btn', type: 'button', onclick: () => deleteShop(shop) }, '店を消す'),
       h('button', { class: 'btn', type: 'button', onclick: closeCard }, '閉じる')));
   document.body.append(card);
+}
+
+// 自分で追加した店：名前を直す・消す（記録は残し、店なしにする）
+async function renameShop(shop) {
+  const name = (prompt('店名を直します', shop.name) || '').trim();
+  if (!name || name === shop.name) return;
+  await db.put('shops', { ...shop, name });
+  await loadData();
+  render();
+  showCard(shopOf(shop.id));
+  toast('店名を直しました');
+}
+async function deleteShop(shop) {
+  const n = state.entries.filter((e) => e.shopId === shop.id).length;
+  if (!confirm(`「${shop.name}」を消しますか？${n ? `（${n}件の記録は残り、「店なし」になります）` : ''}`)) return;
+  for (const e of state.entries.filter((x) => x.shopId === shop.id)) await db.put('entries', { ...e, shopId: null, verified: false });
+  for (const v of state.visits.filter((x) => x.shopId === shop.id)) await db.remove('visits', v.id);
+  await db.remove('shops', shop.id);
+  await loadData();
+  closeCard();
+  render();
+  updateNear();
+  toast(`「${shop.name}」を消しました`);
 }
 
 // ---------- 近くの和菓子屋（OpenStreetMap から作った data/shops/） ----------
@@ -523,16 +543,23 @@ function osmInfoOf(shop) {
   const hit = list.find((x) => x.osmId === shop.osmId);
   return hit ? hit.info : null;
 }
+// 住所（国土地理院の逆ジオコーダーで調べて同梱したもの）。自分で追加した店にはない
+function addressOf(shop) {
+  const info = osmInfoOf(shop);
+  return info && info.ad ? info.ad : '';
+}
 function shopLinks(shop) {
   const info = osmInfoOf(shop);
-  const gmap = `https://www.google.com/maps/search/${encodeURIComponent(shop.name)}/@${shop.lat},${shop.lng},18z`;
+  // Google の公式のリンク形式（Maps URLs）。住所があれば「店名＋町名」、なければ店の位置で開く
+  const query = info && info.ad ? `${shop.name} ${info.ad}` : `${shop.lat},${shop.lng}`;
+  const gmap = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
   const rows = [];
+  if (info && info.ad) rows.push(h('p', { class: 'addr' }, info.ad));
   if (info && info.oh) rows.push(h('p', { class: 'hours' }, '営業時間：' + formatOpeningHours(info.oh)));
   const links = [h('a', { class: 'btn', href: gmap, target: '_blank', rel: 'noopener' }, 'Google マップで開く')];
-  if (info && info.tel) links.push(h('a', { class: 'btn', href: 'tel:' + info.tel.replace(/[^\d+]/g, '') }, '電話'));
   if (info && info.web) links.push(h('a', { class: 'btn', href: info.web, target: '_blank', rel: 'noopener' }, 'Web サイト'));
   rows.push(h('div', { class: 'links' }, links));
-  if (info) rows.push(h('p', { class: 'osmnote' }, 'OpenStreetMap の情報です（古い場合があります）。営業時間は Google マップでも確かめてください'));
+  if (info && (info.oh || info.web)) rows.push(h('p', { class: 'osmnote' }, 'OpenStreetMap の情報です（古い場合があります）。営業時間は Google マップでも確かめてください'));
   return rows;
 }
 
@@ -546,7 +573,7 @@ function showOsmCard(s) {
     shopLinks(s),
     h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
       h('button', { class: 'btn primary', type: 'button', onclick: () => checkIn(s) }, '立ち寄って判子を押す'),
-      h('button', { class: 'btn', type: 'button', onclick: () => markClosed(s) }, '閉店していた'),
+      h('button', { class: 'btn', type: 'button', onclick: () => markClosed(s) }, '閉店・和菓子屋ではない'),
       h('button', { class: 'btn', type: 'button', onclick: closeCard }, '閉じる')));
   document.body.append(card);
 }
@@ -564,7 +591,7 @@ async function registerOsm(s, extra = {}) {
 }
 
 async function markClosed(s) {
-  if (!confirm(`「${s.name}」は閉店していましたか？ 地図と知らせから外します。`)) return;
+  if (!confirm(`「${s.name}」を地図と知らせから外しますか？（閉店していた、和菓子屋ではなかった、など）`)) return;
   const reg = registeredOf(s);
   if (reg) await db.put('shops', { ...reg, closed: true });
   else await registerOsm(s, { closed: true });
@@ -658,8 +685,7 @@ function stopWatch() {
   watchId = null;
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') startWatch();
-  else stopWatch();
+  if (document.visibilityState === 'visible') { if (welcomed()) startWatch(); } else stopWatch();
 });
 
 function focusShop(t) {
@@ -705,7 +731,7 @@ function openSearch(initial = '') {
         type: 'button',
         onclick: () => { closeSheet(); focusShop(shop); },
       },
-      h('span', { class: 'rn' }, shop.name),
+      h('span', { class: 'rl' }, h('span', { class: 'rn' }, shop.name), addressOf(shop) ? h('span', { class: 'ra' }, addressOf(shop)) : null),
       h('span', { class: 'rd' }, [days ? `判子 ${days}` : null, distance === null ? null : fmtDist(distance)].filter(Boolean).join(' ・ '))));
     }));
   };
@@ -775,8 +801,8 @@ function drawQuest(popName = null) {
       q.done ? h('span', { class: 'manganji' }, '満願') : null,
       h('span', { class: 'qcount' }, `${q.count}/${q.total}`)),
     h('div', { class: 'slots' }, q.motifs.map((m) =>
-      h('div', { class: 'slot' + (m.got ? ' got' : '') + (m.name === popName ? ' pop' : '') },
-        h('div', { class: 'dot' }, m.got ? [...m.name][0] : null),
+      h('div', { class: 'slot' + (m.got ? ' got' : '') + (m.photoId ? ' photo' : '') + (m.name === popName ? ' pop' : '') },
+        h('div', { class: 'dot' }, m.photoId ? imgFor(m.photoId, '') : m.got ? [...m.name][0] : null),
         m.got ? null : h('small', {}, m.name)))));
 }
 
@@ -871,8 +897,9 @@ function buildRecord() {
   const chips = h('div', { class: 'chips' });
   const noScore = h('input', { type: 'checkbox' });
   const range = h('input', { type: 'range', min: 0, max: 50, step: 1, value: 30, 'aria-label': '点数' });
-  const big = h('div', { class: 'bignum' }, '3.0');
-  const scoreBox = h('div', { class: 'scorebox' }, big, range,
+  const big = h('div', { class: 'bignum' }, '—');
+  const shint = h('div', { class: 'shint' }, 'スライダーを動かすと点数が付きます');
+  const scoreBox = h('div', { class: 'scorebox' }, big, range, shint,
     h('label', { class: 'check' }, noScore, '点数をつけない'));
   const note = h('textarea', { placeholder: '感想（任意）', rows: 3 });
   const save = h('button', { class: 'btn primary', type: 'button' }, '記録する');
@@ -907,11 +934,13 @@ function buildRecord() {
   motifIn.addEventListener('input', renderChips);
   dateIn.addEventListener('change', renderChips);
 
+  // 点数は、スライダーを動かしたときだけ付ける（触らなければ「点数なし」）
   function syncScore() {
-    big.textContent = (Number(range.value) / 10).toFixed(1);
+    big.textContent = noScore.checked ? '—' : (Number(range.value) / 10).toFixed(1);
     scoreBox.classList.toggle('off', noScore.checked);
+    shint.hidden = !noScore.checked;
   }
-  range.addEventListener('input', syncScore);
+  range.addEventListener('input', () => { noScore.checked = false; syncScore(); });
   noScore.addEventListener('change', syncScore);
 
   function fillShops() {
@@ -962,7 +991,7 @@ function buildRecord() {
     setFile(null);
     sweet.value = ''; f.classic = undefined; f.picking = false; renderClassic(); motifIn.value = ''; note.value = ''; newName.value = '';
     dateIn.value = todayStr();
-    noScore.checked = false; range.value = 30;
+    noScore.checked = true; range.value = 30;
     f.newPoint = null;
     shopSel.value = '';
     syncScore(); renderChips();
@@ -1151,6 +1180,33 @@ async function wipe() {
   toast('全部消しました');
 }
 
+// ---------- 初めて開いた人への説明 ----------
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function welcomed() { try { return localStorage.getItem('kareki.welcome') === '1'; } catch { return true; } }
+function openWelcome(done) {
+  const finish = () => { try { localStorage.setItem('kareki.welcome', '1'); } catch { /* 保存できなくても続ける */ } closeSheet(); done(); };
+  showSheet(null, [
+    h('h1', { style: 'font-size:24px;margin:4px 0 10px' }, '菓暦へようこそ'),
+    h('ul', { class: 'welcome' },
+      h('li', {}, '和菓子を食べたら「＋」で記録します。上生菓子は季節の図鑑に、どら焼きや大福などは定番の図鑑に入ります。'),
+      h('li', {}, '上の「今月のお題」は、その月の上生菓子の題材です。5つ集めると満願です。'),
+      h('li', {}, '地図の点線の丸は、近くの和菓子屋です。店の50m以内で「立ち寄って判子を押す」が押せます。'),
+      h('li', {}, '位置情報は、近くの店を知らせて判子を押すためだけに使います。記録も位置も、このスマホの中にだけ保存し、外には送りません。'),
+      isStandalone() ? null : h('li', {}, 'ホーム画面に追加すると、アプリのように開けて、データも消えにくくなります（iPhone は Safari の共有ボタン →「ホーム画面に追加」）。')),
+    h('button', { class: 'btn primary', type: 'button', style: 'width:100%;margin-top:8px', onclick: finish }, 'はじめる'),
+  ]);
+}
+// 現在地を取って地図を合わせ、位置を追い始める（初めての人は、説明を読んでから位置情報の許可を聞く）
+function startLocation() {
+  getPos().then((pos) => {
+    if (!pos || !mainMap) return;
+    mainMap.setView([pos.lat, pos.lng], 15);
+    setPosDot(pos);
+    updateNear();
+  });
+  if (document.visibilityState === 'visible') startWatch();
+}
+
 // ---------- 起動 ----------
 const record = buildRecord();
 
@@ -1163,9 +1219,18 @@ const record = buildRecord();
   }
   initMap();
   render();
-  if (document.visibilityState === 'visible') startWatch();
+  if (welcomed()) startLocation();
+  else openWelcome(startLocation);
   if (state.entries.length) requestPersist(); // 記録がある人は、データを消されにくくする
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    // 新しい版が入ったら、開いている画面を一度だけ読み込み直す（開き直さなくても新しい版になる）
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloaded || !sheetEl.hidden) return; // 初めての登録時と、入力中のシートがあるときは読み込み直さない
+      reloaded = true;
+      location.reload();
+    });
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => reg.update()).catch(() => {});
   }
 })();

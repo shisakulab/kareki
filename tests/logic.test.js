@@ -373,3 +373,19 @@ test('isWagashiShop: 屋号らしい名前と cuisine=japanese を拾う', () =>
 test('テーマ：60のモチーフすべてに一言の説明がある', () => {
   for (const m of theme.periods.flatMap((p) => p.motifs)) assert.ok(theme.hints[m], m);
 });
+
+test('latestPhotoId / shopStamp / monthMotifs: 判子に入れる写真', async () => {
+  const { latestPhotoId, shopStamp, monthMotifs } = await import('../logic.js');
+  const es = [
+    { date: '2026-10-01', shopId: 's', sweetName: 'a', motif: '栗', photoId: 'p1', createdAt: 1 },
+    { date: '2026-10-05', shopId: 's', sweetName: 'b', motif: '菊', photoId: null, createdAt: 2 },
+    { date: '2026-10-03', shopId: 's', sweetName: 'c', motif: '栗', photoId: 'p3', createdAt: 3 },
+  ];
+  assert.equal(latestPhotoId(es), 'p3');
+  assert.equal(latestPhotoId([{ date: '2026-01-01', photoId: null }]), null);
+  assert.equal(shopStamp({ id: 's', name: '店' }, es, theme).photoId, 'p3');
+  const q = monthMotifs(es, theme, 2026, '10');
+  assert.equal(q.motifs.find((m) => m.name === '栗').photoId, 'p3');
+  assert.equal(q.motifs.find((m) => m.name === '菊').photoId, null);
+  assert.equal(q.motifs.find((m) => m.name === '柿').photoId, null);
+});
