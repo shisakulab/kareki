@@ -2,3 +2,5 @@ SPEC.md
 desktop.ini
 Thumbs.db
 .DS_Store
+demo/
+tools/.cache/

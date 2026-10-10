@@ -122,16 +122,21 @@ export function fitSize(w, h, max = PHOTO_MAX) {
   return { w: Math.round(w * k), h: Math.round(h * k) };
 }
 
-// 判子（店のマーカー）の中身。色は最近の記録の月、字は最近のモチーフ（なければ店名）の1文字目
-export function shopStamp(shop, entries, theme) {
+// 判子（店のマーカー）の中身。色は最近の記録・立ち寄りの月、字は最近のモチーフ（なければ店名）の1文字目
+// 回数は、記録か立ち寄りがあった日数。二重の縁（verified）は、立ち寄りか、その場での記録が1つでもあるとき
+export function shopStamp(shop, entries, theme, visits = []) {
   const st = shopStats(shop.id, entries);
-  if (!st.latest) return { empty: true, visits: 0, color: null, glyph: [...shop.name][0] || '', verified: false };
-  const p = theme.periods.find((x) => x.key === monthKeyOf(st.latest.date));
+  const myVisits = visits.filter((v) => v.shopId === shop.id);
+  if (!st.latest && !myVisits.length) return { empty: true, visits: 0, color: null, glyph: [...shop.name][0] || '', verified: false };
+  const lastEntry = st.latest ? st.latest.date : '';
+  const lastVisit = myVisits.reduce((m, v) => { const d = todayStr(new Date(v.at)); return d > m ? d : m; }, '');
+  const latestDate = lastEntry > lastVisit ? lastEntry : lastVisit;
+  const p = theme.periods.find((x) => x.key === monthKeyOf(latestDate));
   const withMotif = st.entries.filter((e) => e.motif).reduce((m, e) => (!m || e.date > m.date ? e : m), null);
   const text = (withMotif && withMotif.motif) || shop.name;
   return {
-    empty: false, visits: st.visits, color: p ? p.color : null, glyph: [...text][0] || '',
-    verified: st.entries.some((e) => e.verified),
+    empty: false, visits: shopVisitDays(entries, visits, shop.id), color: p ? p.color : null, glyph: [...text][0] || '',
+    verified: myVisits.length > 0 || st.entries.some((e) => e.verified),
   };
 }
 
@@ -148,4 +153,104 @@ export function monthMotifs(entries, theme, year, key) {
   const motifs = p.motifs.map((name) => ({ name, got: got.has(name) }));
   const count = motifs.filter((m) => m.got).length;
   return { motifs, count, total: motifs.length, done: count === motifs.length };
+}
+
+// ---------- v1.2 近くの和菓子屋 ----------
+export const CHECKIN_METERS = 50;
+export const ACCURACY_CAP = 30;
+export const NEAR_METERS = 300;
+export const TILE_DEG = 0.5;
+
+const WAGASHI_WORDS = [
+  '和菓子', '御菓子司', 'お菓子司', '菓子司', '菓舗', '菓匠', '甘味', '餅', '団子', '饅頭', '最中', '羊羹', '羊かん',
+  'どら焼', 'どらやき', 'きんつば', '金鍔', '大福', 'せんべい', '煎餅', 'おかき', 'あられ', 'たい焼', 'たいやき',
+  '今川焼', 'わらび', 'もなか', 'まんじゅう', 'ようかん', 'だんご', 'おはぎ', 'かりんとう', '練り切り', '上生',
+  '餡', '大判焼', '回転焼', 'ういろう', '落雁', '鯛焼', 'もち', 'かるかん', '八ツ橋', '八つ橋', 'ぜんざい', 'みたらし', '草餅',
+  '菓子舗', '菓子店', '菓子屋', '菓子処', '菓司', '菓寮', 'モナカ',
+];
+// 店名に「和菓子の語」がなくても有名な和菓子屋（ごく一部）
+const WAGASHI_BRANDS = [
+  '舟和', '亀十', '虎屋', 'とらや', '空也', '榮太樓', '栄太楼', '鶴屋吉信', '塩瀬総本家', '千鳥屋', '鼓月', '源吉兆庵', '御座候',
+  '亀屋万年堂', '田子の月', '梅林堂', '文明堂', '薩摩蒸氣屋', '十万石', '一六本舗', '伊勢屋', '松月堂', '紅葉堂',
+];
+const WESTERN_WORDS = [
+  'ケーキ', 'パティスリー', 'パティシエ', '洋菓子', 'チョコ', 'ショコラ', 'ドーナツ', 'ドーナッツ', 'クレープ', 'シュー', 'プリン',
+  'マカロン', 'タルト', 'パンケーキ', 'ベーカリー', 'ジェラート', 'アイスクリーム', 'クッキー', 'キャンディ', 'ホットケーキ', '駄菓子', 'まちおか', 'コージーコーナー', 'シャトレーゼ', '不二家',
+  'patisserie', 'patissier', 'pâtisserie', 'cake', 'chocolat', 'chocolate', 'bakery', 'donut', 'crepe', 'macaron', 'sweets',
+];
+const nameOf = (tags) => String((tags && (tags.name || tags['name:ja'])) || '').normalize('NFKC').trim();
+
+// OSM のタグから、和菓子屋らしいか。shop=confectionery か、名前に「甘味」を含む amenity=cafe だけが対象
+export function isWagashiShop(tags) {
+  if (!tags) return false;
+  const name = nameOf(tags);
+  if (!name) return false;
+  const lower = name.toLowerCase();
+  if (tags.shop === 'confectionery') {
+    if (['wagashi', 'japanese', 'rice_crackers'].includes(tags.confectionery)) return true;
+    if (WESTERN_WORDS.some((w) => lower.includes(w.toLowerCase()))) return false;
+    return WAGASHI_WORDS.some((w) => name.includes(w)) || WAGASHI_BRANDS.some((w) => name.includes(w));
+  }
+  if (tags.amenity === 'cafe') {
+    if (WESTERN_WORDS.some((w) => lower.includes(w.toLowerCase()))) return false;
+    return name.includes('甘味');
+  }
+  return false;
+}
+
+// 0.5度四方の区画のキー（下端の緯度_経度）。例 35.5_139.5
+export function tileKey(lat, lng) {
+  const f = (v) => (Math.floor(v / TILE_DEG + 1e-9) * TILE_DEG).toFixed(1);
+  return `${f(lat)}_${f(lng)}`;
+}
+
+// 範囲（南・西・北・東）にかかる区画のキーの一覧。広すぎる範囲は最大 max 個で打ち切る
+export function tilesForBounds(s, w, n, e, max = 64) {
+  const keys = [];
+  const i0 = Math.floor(s / TILE_DEG + 1e-9);
+  const i1 = Math.floor(n / TILE_DEG + 1e-9);
+  const j0 = Math.floor(w / TILE_DEG + 1e-9);
+  const j1 = Math.floor(e / TILE_DEG + 1e-9);
+  for (let i = i0; i <= i1; i++) {
+    for (let j = j0; j <= j1; j++) {
+      if (keys.length >= max) return keys;
+      keys.push(`${(i * TILE_DEG).toFixed(1)}_${(j * TILE_DEG).toFixed(1)}`);
+    }
+  }
+  return keys;
+}
+
+// いちばん近い店と距離。閉店にした店は除く。なければ null
+export function nearestShop(pos, shops) {
+  if (!pos) return null;
+  let best = null;
+  for (const shop of shops) {
+    if (shop.closed) continue;
+    const distance = distanceMeters(pos, shop);
+    if (!best || distance < best.distance) best = { shop, distance };
+  }
+  return best;
+}
+
+// a から b への方角（北が 0、時計回り、0〜360 度）
+export function bearingDeg(a, b) {
+  const rad = (d) => (d * Math.PI) / 180;
+  const dLng = rad(b.lng - a.lng);
+  const y = Math.sin(dLng) * Math.cos(rad(b.lat));
+  const x = Math.cos(rad(a.lat)) * Math.sin(rad(b.lat)) - Math.sin(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.cos(dLng);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+// 立ち寄れるか：距離 − min(位置の誤差, 30m) が 50m 以内（誤差が分からなければ 0 とみなす）
+export function canCheckIn(distance, accuracy) {
+  const acc = Number.isFinite(accuracy) ? Math.max(0, accuracy) : 0;
+  return distance - Math.min(acc, ACCURACY_CAP) <= CHECKIN_METERS;
+}
+
+// その店に「立ち寄り」か「記録」があった日数（同じ日は1日）
+export function shopVisitDays(entries, visits, shopId) {
+  const days = new Set();
+  for (const e of entries) if (e.shopId === shopId) days.add(e.date);
+  for (const v of visits) if (v.shopId === shopId) days.add(todayStr(new Date(v.at)));
+  return days.size;
 }

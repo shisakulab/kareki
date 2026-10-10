@@ -8,6 +8,7 @@
 
 ## 使い方
 - **地図（ホーム）**：行った店は、季節の色の判子で表示されます。字はその店で最後に集めたモチーフ、数字は通った回数です。店の近く（150m 以内）で記録したことがある店は、判子の縁が二重になります。地図を長押しすると店を追加できます
+- **近くの和菓子屋**：ズーム 14 以上で、まだ立ち寄っていない和菓子屋が点線の丸で出ます。アプリを開いているあいだ、300m 以内に店があると画面の上に距離と方向が出て、50m 以内に入ると「立ち寄って判子を押す」が押せます（位置を確かめて押すので、その場にいないと押せません）。店は OpenStreetMap の名前から選んでいるので、違う店や抜けがあります。閉店していた店は外せます
 - **今月のお題**：画面の上にあるカードに、その月のモチーフが5つ並びます（10月なら菊・栗・柿・十三夜・ハロウィン）。記録すると判子が押され、5つそろうと「満願」になります
 - **＋（記録）**：写真・品名・店・日付・モチーフ・点数（0.0〜5.0）・感想を入れて保存します
 - **図鑑**：12か月のマス。その月にいちばん点数の高かった1品の写真が入ります。設定（データの書き出し・読み込み）は図鑑の右上にあります
@@ -27,11 +28,14 @@ python -m http.server
 - `logic.js`：集計・判子・お題・距離の計算（DOM に触らない純粋関数）
 - `db.js`：IndexedDB の読み書き
 - `themes/jonamagashi.js`：月・季節の色・モチーフ・別名。アプリ本体はテーマに依存しません
+- `tools/build-shops.mjs`：OpenStreetMap（Overpass API）から和菓子屋を集めて `data/shops/` を作る（`node tools/build-shops.mjs`。取得結果は `tools/.cache/` に残り、作り直すときに再利用。取り直すなら `--refresh`）
+- `data/shops/`：作った店のデータ（0.5度四方の区画ごとの JSON）。詳しくは [data/README.md](data/README.md)
 - `sw.js`：オフライン用のキャッシュ（ファイルを変えたら `VERSION` を上げる）
 
 ## クレジット
 - 地図タイル：[国土地理院](https://maps.gsi.go.jp/development/ichiran.html)（淡色地図）
+- 和菓子屋の位置：© [OpenStreetMap contributors](https://www.openstreetmap.org/copyright)（[ODbL](https://opendatacommons.org/licenses/odbl/1-0/)）
 - 地図表示：[Leaflet](https://leafletjs.com/) 1.9.4（BSD-2-Clause、`vendor/` に同梱。ライセンスは `vendor/LICENSE-leaflet.txt`）
 
 ## ライセンス
-MIT License（[LICENSE](LICENSE)）
+MIT License（[LICENSE](LICENSE)）。ただし `data/shops/` は OpenStreetMap のデータで、ODbL です

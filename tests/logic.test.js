@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   monthKeyOf, yearSummary, motifProgress, canonicalMotif, distanceMeters, isVerified,
   groupByDay, clampScore, shopStats, sortShopsByDistance, fitSize, shopStamp, monthMotifs,
+  isWagashiShop, tileKey, tilesForBounds, nearestShop, bearingDeg, canCheckIn, shopVisitDays,
 } from '../logic.js';
 import theme from '../themes/jonamagashi.js';
 
@@ -163,4 +164,99 @@ test('monthMotifs: 今年その月のモチーフだけ数える・満願', () =
   const r = monthMotifs([es[0], es[5], { date: '2026-10-09', motif: '自由' }], theme, 2026, '10');
   assert.deepEqual([r.count, r.total, r.done], [1, 5, false]);
   assert.equal(monthMotifs(es, theme, 2024, '10').count, 0);
+});
+
+test('isWagashiShop: 和菓子屋は残し、洋菓子・地名・名前なしは除く', () => {
+  const conf = (name, extra = {}) => ({ shop: 'confectionery', name, ...extra });
+  for (const name of ['御菓子司 中里', '羽二重団子', '舟和 浅草本店', '亀十', 'ゼイタク煎餅', '梅園 甘味処', '桜餅 長命寺', '和菓子 いづみや']) {
+    assert.equal(isWagashiShop(conf(name)), true, name);
+  }
+  assert.equal(isWagashiShop(conf('何とか堂', { confectionery: 'wagashi' })), true);
+  assert.equal(isWagashiShop(conf('何とか堂', { confectionery: 'rice_crackers' })), true);
+  // 洋菓子
+  for (const name of ['パティスリー・ルシェル', 'Patisserie Ange', '洋菓子のフジ', 'チョコレート工房', 'ドーナツ屋', '和栗のモンブランケーキ', '大福とクレープ']) {
+    assert.equal(isWagashiShop(conf(name)), false, name);
+  }
+  // 名前がない／語がない
+  assert.equal(isWagashiShop({ shop: 'confectionery' }), false);
+  assert.equal(isWagashiShop(conf('サンプル商店')), false);
+  // 地名・交番・病院は、語を含んでも対象外
+  assert.equal(isWagashiShop({ amenity: 'police', name: '団子坂交番' }), false);
+  assert.equal(isWagashiShop({ highway: 'bus_stop', name: '団子坂下' }), false);
+  assert.equal(isWagashiShop({ amenity: 'hospital', name: '餅田病院' }), false);
+  // 甘味の喫茶店
+  assert.equal(isWagashiShop({ amenity: 'cafe', name: '甘味処 みつ豆' }), true);
+  assert.equal(isWagashiShop({ amenity: 'cafe', name: 'スターバックス' }), false);
+  assert.equal(isWagashiShop({ amenity: 'cafe', name: '甘味とケーキ' }), false);
+  assert.equal(isWagashiShop(null), false);
+});
+
+test('tileKey / tilesForBounds: 0.5度四方の区画', () => {
+  assert.equal(tileKey(35.7148, 139.7967), '35.5_139.5');
+  assert.equal(tileKey(35.5, 139.5), '35.5_139.5');
+  assert.equal(tileKey(35.4999, 139.9999), '35.0_139.5');
+  assert.equal(tileKey(43.06, 141.35), '43.0_141.0');
+  assert.deepEqual(tilesForBounds(35.70, 139.70, 35.72, 139.80), ['35.5_139.5']);
+  assert.deepEqual(tilesForBounds(35.4, 139.4, 35.6, 139.6), ['35.0_139.0', '35.0_139.5', '35.5_139.0', '35.5_139.5']);
+  assert.equal(tilesForBounds(30, 120, 45, 150, 10).length, 10);
+});
+
+test('nearestShop / bearingDeg', () => {
+  const pos = { lat: 35, lng: 135 };
+  const shops = [
+    { id: 'far', lat: 35.01, lng: 135 },
+    { id: 'closed', lat: 35.0001, lng: 135, closed: true },
+    { id: 'near', lat: 35.001, lng: 135 },
+  ];
+  const r = nearestShop(pos, shops);
+  assert.equal(r.shop.id, 'near');
+  assert.ok(Math.abs(r.distance - 111) < 2);
+  assert.equal(nearestShop(pos, []), null);
+  assert.equal(nearestShop(pos, [{ id: 'c', lat: 35, lng: 135, closed: true }]), null);
+  assert.equal(nearestShop(null, shops), null);
+
+  const o = { lat: 35, lng: 135 };
+  assert.equal(Math.round(bearingDeg(o, { lat: 36, lng: 135 })), 0);
+  assert.equal(Math.round(bearingDeg(o, { lat: 35, lng: 136 })), 90);
+  assert.equal(Math.round(bearingDeg(o, { lat: 34, lng: 135 })), 180);
+  assert.equal(Math.round(bearingDeg(o, { lat: 35, lng: 134 })), 270);
+});
+
+test('canCheckIn: 距離 − min(誤差, 30m) が 50m 以内', () => {
+  assert.equal(canCheckIn(50, 0), true);
+  assert.equal(canCheckIn(50.5, 0), false);
+  assert.equal(canCheckIn(70, 20), true);   // 70 − 20 = 50
+  assert.equal(canCheckIn(71, 20), false);
+  assert.equal(canCheckIn(80, 30), true);   // 80 − 30 = 50
+  assert.equal(canCheckIn(100, 500), false); // 誤差は 30m までしか引かない
+  assert.equal(canCheckIn(50, null), true);
+  assert.equal(canCheckIn(51, undefined), false);
+});
+
+test('shopVisitDays: 立ち寄りと記録を、日にち単位で数える', () => {
+  const at = (y, m, d, hh = 12) => new Date(y, m - 1, d, hh).getTime();
+  const entries = [
+    { shopId: 's', date: '2026-10-02' },
+    { shopId: 's', date: '2026-10-02' },
+    { shopId: 'x', date: '2026-10-03' },
+  ];
+  const visits = [
+    { shopId: 's', at: at(2026, 10, 2) },     // 記録と同じ日
+    { shopId: 's', at: at(2026, 10, 9, 9) },
+    { shopId: 's', at: at(2026, 10, 9, 18) }, // 同じ日の2回目
+    { shopId: 'x', at: at(2026, 10, 3) },
+  ];
+  assert.equal(shopVisitDays(entries, visits, 's'), 2 + 0);
+  assert.equal(shopVisitDays(entries, visits, 'x'), 1);
+  assert.equal(shopVisitDays(entries, visits, 'none'), 0);
+  assert.equal(shopVisitDays([], [], 's'), 0);
+});
+
+test('shopStamp: 立ち寄りだけでも判子が押され、二重の縁になる', () => {
+  const shop = { id: 's', name: '亀十' };
+  const visits = [{ shopId: 's', at: new Date(2026, 9, 9, 12).getTime() }];
+  const s = shopStamp(shop, [], theme, visits);
+  assert.deepEqual([s.empty, s.visits, s.glyph, s.verified], [false, 1, '亀', true]);
+  assert.equal(s.color, theme.periods[9].color);
+  assert.equal(shopStamp(shop, [], theme, [{ shopId: 'other', at: 0 }]).empty, true);
 });

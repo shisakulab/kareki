@@ -1,15 +1,19 @@
-// IndexedDB `kareki`：shops / entries / photos
+// IndexedDB `kareki`：shops / entries / photos / visits
 const NAME = 'kareki';
-const STORES = ['shops', 'entries', 'photos'];
+const STORES = ['shops', 'entries', 'photos', 'visits'];
+const VERSION = 2; // 2：visits（立ち寄り）を追加
 
 let dbPromise = null;
 
 export function openDB() {
   if (!dbPromise) {
     dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(NAME, 1);
+      const req = indexedDB.open(NAME, VERSION);
       req.onupgradeneeded = () => {
-        for (const s of STORES) req.result.createObjectStore(s, { keyPath: 'id' });
+        // 既にあるストアは触らない（古いバージョンのデータを残す）
+        for (const s of STORES) {
+          if (!req.result.objectStoreNames.contains(s)) req.result.createObjectStore(s, { keyPath: 'id' });
+        }
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
@@ -48,10 +52,10 @@ const dataURLToBlob = async (url) => (await fetch(url)).blob();
 
 // 写真を base64 で含めた1つの JSON
 export async function exportAll() {
-  const [shops, entries, photos] = await Promise.all(STORES.map(getAll));
+  const [shops, entries, photos, visits] = await Promise.all(STORES.map(getAll));
   const photoData = [];
   for (const p of photos) photoData.push({ id: p.id, data: await blobToDataURL(p.blob) });
-  return { app: 'kareki', version: 1, exportedAt: new Date().toISOString(), shops, entries, photos: photoData };
+  return { app: 'kareki', version: 2, exportedAt: new Date().toISOString(), shops, entries, visits, photos: photoData };
 }
 
 // 同じ id は上書き、それ以外は残す
@@ -61,6 +65,7 @@ export async function importAll(json) {
   }
   for (const s of json.shops) await put('shops', s);
   for (const e of json.entries) await put('entries', e);
+  for (const v of json.visits || []) await put('visits', v); // v1 の書き出しには無い
   for (const p of json.photos || []) await put('photos', { id: p.id, blob: await dataURLToBlob(p.data) });
 }
 

@@ -3,15 +3,20 @@ import * as db from './db.js';
 import {
   todayStr, monthKeyOf, yearOf, yearSummary, motifProgress, canonicalMotif, isVerified, sortShopsByDistance,
   groupByDay, clampScore, shopStats, fitSize, shopStamp, monthMotifs,
+  distanceMeters, tilesForBounds, nearestShop, bearingDeg, canCheckIn, shopVisitDays,
+  NEAR_METERS, CHECKIN_METERS, ACCURACY_CAP,
 } from './logic.js';
 
 const GSI_URL = 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png';
 const GSI_ATTR = '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>';
 const TOKYO = { lat: 35.681236, lng: 139.767125 };
+const OSM_ATTR = '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>';
 const NEUTRAL = '#8a8178';
+const QUEST_HELP = '上生菓子は、季節を形と色で表すお菓子です。今月のお題に合う上生菓子をお店で見つけて記録すると、判子が押されます。';
 
 const mapEl = document.getElementById('map');
 const questEl = document.getElementById('quest');
+const nearEl = document.getElementById('near');
 const fabEl = document.getElementById('fab');
 const scrim = document.getElementById('scrim');
 const sheetEl = document.getElementById('sheet');
@@ -19,7 +24,7 @@ const sheetBody = document.getElementById('sheetbody');
 const grabEl = document.getElementById('grab');
 const toastEl = document.getElementById('toast');
 
-const state = { year: new Date().getFullYear(), shops: [], entries: [], pos: null, posAt: 0, maps: [] };
+const state = { year: new Date().getFullYear(), shops: [], entries: [], visits: [], pos: null, acc: null, posAt: 0, maps: [] };
 const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const period = (key) => theme.periods.find((p) => p.key === key);
@@ -78,24 +83,27 @@ function dropPhotoCache() {
 }
 
 // 位置情報（15秒以内の結果は使い回す）
-function getPos(timeout = 6000) {
-  if (state.pos && Date.now() - state.posAt < 15000) return Promise.resolve(state.pos);
+// force：キャッシュを使わず、取り直す
+function getPos(timeout = 6000, force = false) {
+  if (!force && state.pos && Date.now() - state.posAt < 15000) return Promise.resolve(state.pos);
   if (!navigator.geolocation) return Promise.resolve(null);
   return new Promise((resolve) => {
     navigator.geolocation.getCurrentPosition(
       (p) => {
         state.pos = { lat: p.coords.latitude, lng: p.coords.longitude };
+        state.acc = p.coords.accuracy;
         state.posAt = Date.now();
         resolve(state.pos);
       },
-      () => resolve(null),
-      { enableHighAccuracy: true, timeout, maximumAge: 15000 },
+      // 測り直せなかったときは、1分以内に取れた位置で代える（立ち止まっていると更新が来ない端末があるため）
+      () => resolve(!force && state.pos && Date.now() - state.posAt < 60000 ? state.pos : null),
+      { enableHighAccuracy: true, timeout, maximumAge: force ? 0 : 15000 },
     );
   });
 }
 
 async function loadData() {
-  [state.shops, state.entries] = await Promise.all([db.getAll('shops'), db.getAll('entries')]);
+  [state.shops, state.entries, state.visits] = await Promise.all([db.getAll('shops'), db.getAll('entries'), db.getAll('visits')]);
 }
 
 // 長辺 1280px の JPEG に描き直す（撮影情報は消える）
@@ -149,9 +157,10 @@ const sheet = { redo: null };
 function showSheet(redo, nodes, after) {
   sheet.redo = redo;
   destroyMaps();
-  sheetBody.replaceChildren(...nodes);
+  sheetBody.replaceChildren(...nodes.flat().filter((n) => n !== null && n !== undefined && n !== false));
   sheetBody.scrollTop = 0;
   sheetEl.style.transform = '';
+  sheetEl.classList.remove('small');
   sheetEl.hidden = false;
   scrim.hidden = false;
   if (after) after();
@@ -159,6 +168,7 @@ function showSheet(redo, nodes, after) {
 function closeSheet() {
   sheet.redo = null;
   sheetEl.hidden = true;
+  sheetEl.classList.remove('small');
   scrim.hidden = true;
   sheetEl.style.transform = '';
   destroyMaps();
@@ -221,7 +231,8 @@ function openZukan() {
 
   const achv = h('div', { class: 'achv' },
     h('span', {}, isThisYear ? '今年 ' : `${state.year}年 `, h('b', {}, `${sum.filled}/12`), ' か月'),
-    h('span', {}, 'モチーフ 通算 ', h('b', {}, `${prog.count}/${prog.total}`)));
+    h('span', {}, 'モチーフ 通算 ', h('b', {}, `${prog.count}/${prog.total}`)),
+    h('span', {}, '立ち寄った店 ', h('b', {}, new Set(state.visits.map((v) => v.shopId).filter(shopOf)).size), ' 軒'));
 
   const grid = h('div', { class: 'grid' }, sum.months.map((c) => {
     const p = period(c.key);
@@ -244,8 +255,8 @@ function openZukan() {
   showSheet(openZukan, [bar, achv, grid]);
 }
 
-// back：戻るボタンで開く画面（省略なら閉じる）
-function openMonth(year, key, back = closeSheet) {
+// back：戻るボタンで開く画面（省略なら閉じる）。intro：先頭に出す一言の説明
+function openMonth(year, key, back = closeSheet, intro = null) {
   const p = period(key);
   const list = state.entries.filter((e) => yearOf(e.date) === year && monthKeyOf(e.date) === key)
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : (b.createdAt || 0) - (a.createdAt || 0)));
@@ -264,7 +275,7 @@ function openMonth(year, key, back = closeSheet) {
     h('div', { class: 'motif' + (names[m] ? ' got' : '') }, (names[m] ? '✓ ' : '') + m,
       names[m] ? h('small', {}, names[m]) : null)));
 
-  showSheet(() => openMonth(year, key, back), [bar, h('h3', {}, '記録'), recs, h('h3', { style: 'margin-bottom:8px' }, 'モチーフ'), motifs]);
+  showSheet(() => openMonth(year, key, back), [bar, intro ? h('p', { class: 'intro' }, intro) : null, h('h3', {}, '記録'), recs, h('h3', { style: 'margin-bottom:8px' }, 'モチーフ'), motifs].filter(Boolean));
 }
 
 // 記録1件の行。withDelete なら削除ボタン付き
@@ -299,10 +310,11 @@ let markerLayer = null;
 let posDot = null;
 let card = null;
 const markers = new Map(); // 店のid → Leaflet のマーカー
+let osmLayer = null;
 function closeCard() { if (card) { card.remove(); card = null; } }
 
 function hankoIcon(shop) {
-  const s = shopStamp(shop, state.entries, theme);
+  const s = shopStamp(shop, state.entries, theme, state.visits);
   const cls = 'hanko' + (s.empty ? ' empty' : '') + (s.verified ? ' dbl' : '');
   const node = s.empty
     ? h('div', { class: cls })
@@ -320,6 +332,8 @@ function initMap() {
   mainMap = L.map(mapEl, { zoomControl: false });
   L.control.zoom({ position: 'topright' }).addTo(mainMap);
   L.tileLayer(GSI_URL, { attribution: GSI_ATTR, maxZoom: 18 }).addTo(mainMap);
+  mainMap.attributionControl.addAttribution(OSM_ATTR);
+  osmLayer = L.layerGroup().addTo(mainMap);
   markerLayer = L.layerGroup().addTo(mainMap);
 
   if (state.shops.length) mainMap.fitBounds(L.latLngBounds(state.shops.map((s) => [s.lat, s.lng])).pad(0.3), { maxZoom: 16 });
@@ -328,9 +342,14 @@ function initMap() {
   getPos().then((pos) => {
     if (!pos) return;
     mainMap.setView([pos.lat, pos.lng], 15);
-    posDot = L.circleMarker([pos.lat, pos.lng], { radius: 7, color: '#fff', weight: 2, fillColor: '#2f6fdb', fillOpacity: 1, interactive: false }).addTo(mainMap);
+    setPosDot(pos);
+    updateNear();
   });
 
+  mainMap.on('moveend', scheduleOsm);
+  // 指で触れたときだけ「自分で動かした」と数える（開いた直後の自動のズームは数えない）
+  mainMap.getContainer().addEventListener('pointerdown', () => { lastUserMove = Date.now(); });
+  mainMap.getContainer().addEventListener('wheel', () => { lastUserMove = Date.now(); }, { passive: true });
   mainMap.on('click', closeCard);
   mainMap.on('contextmenu', async (ev) => {
     const name = (prompt('この場所に店を追加します。店名は？') || '').trim();
@@ -348,10 +367,18 @@ function drawMap() {
   markerLayer.clearLayers();
   markers.clear();
   for (const shop of state.shops) {
+    if (shop.closed) continue;
     const m = L.marker([shop.lat, shop.lng], { icon: hankoIcon(shop), title: shop.name }).on('click', () => showCard(shop));
     m.addTo(markerLayer);
     markers.set(shop.id, m);
   }
+  refreshOsm();
+}
+
+function setPosDot(pos) {
+  if (!mainMap) return;
+  if (posDot) posDot.setLatLng([pos.lat, pos.lng]);
+  else posDot = L.circleMarker([pos.lat, pos.lng], { radius: 7, color: '#fff', weight: 2, fillColor: '#2f6fdb', fillOpacity: 1, interactive: false }).addTo(mainMap);
 }
 
 function showCard(shop) {
@@ -360,14 +387,232 @@ function showCard(shop) {
   const sorted = [...st.entries].sort((a, b) => (a.date < b.date ? 1 : -1));
   card = h('div', { class: 'shopcard' },
     h('h2', {}, shop.name),
-    h('p', { class: 'sub' }, `行った回数 ${st.visits}回 ・ 平均 ${st.avg === null ? '—' : st.avg.toFixed(1) + '点'}`),
+    h('p', { class: 'sub' }, `行った回数 ${shopVisitDays(state.entries, state.visits, shop.id)}回 ・ 平均 ${st.avg === null ? '—' : st.avg.toFixed(1) + '点'}`),
     sorted.length
       ? h('ul', { class: 'list' }, sorted.map((e) => h('li', {}, recRow(e, false))))
       : h('p', { class: 'muted' }, 'まだ記録がありません'),
-    h('div', { style: 'display:flex;gap:8px' },
+    h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
       h('button', { class: 'btn primary', type: 'button', onclick: () => { record.setShop(shop.id); closeCard(); openRecord(); } }, 'ここで記録する'),
+      h('button', { class: 'btn', type: 'button', onclick: () => checkIn(shop) }, '立ち寄る'),
       h('button', { class: 'btn', type: 'button', onclick: closeCard }, '閉じる')));
   document.body.append(card);
+}
+
+// ---------- 近くの和菓子屋（OpenStreetMap から作った data/shops/） ----------
+const OSM_MIN_ZOOM = 14;
+const OSM_MAX_SHOWN = 200;
+const tiles = new Map(); // 区画のキー → [{ osmId, name, lat, lng }, …]（読み込んだらメモリに持つ）
+const tilePending = new Map();
+let osmSeq = 0;
+let osmTimer = 0;
+
+function loadTile(key) {
+  if (tiles.has(key)) return Promise.resolve();
+  if (!tilePending.has(key)) {
+    tilePending.set(key, fetch(`data/shops/${key}.json`)
+      .then((r) => (r.ok ? r.json() : [])) // その区画に店がなければファイルがない
+      .catch(() => null) // 通信の失敗は覚えない（次にまた試す）
+      .then((list) => {
+        tilePending.delete(key);
+        if (list) tiles.set(key, list.map(([osmId, name, lat, lng]) => ({ osmId, name, lat, lng })));
+      }));
+  }
+  return tilePending.get(key);
+}
+const ensureTiles = (keys) => Promise.all(keys.filter((k) => !tiles.has(k)).map(loadTile));
+const osmShopsIn = (keys) => keys.flatMap((k) => tiles.get(k) || []);
+const registeredOsmIds = () => new Set(state.shops.filter((s) => s.osmId).map((s) => s.osmId));
+// OSM の店（id なし）を、登録済みの店に引き当てる。自分の店はそのまま
+const registeredOf = (t) => (t.id ? t : state.shops.find((s) => s.osmId && s.osmId === t.osmId) || null);
+
+function scheduleOsm() {
+  clearTimeout(osmTimer);
+  osmTimer = setTimeout(refreshOsm, 150);
+}
+
+function osmIcon(s) {
+  return L.divIcon({
+    className: 'hanko-wrap', iconSize: [36, 36], iconAnchor: [18, 18],
+    html: h('div', { class: 'hanko osm' }, h('span', { class: 'g' }, [...s.name][0] || '')),
+  });
+}
+
+// 見えている範囲の、まだ立ち寄っていない和菓子屋（ズーム 14 以上、最大 200 件）
+async function refreshOsm() {
+  if (!mainMap) return;
+  const seq = ++osmSeq;
+  if (mainMap.getZoom() < OSM_MIN_ZOOM) { osmLayer.clearLayers(); return; }
+  const b = mainMap.getBounds();
+  const keys = tilesForBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast());
+  await ensureTiles(keys);
+  if (seq !== osmSeq) return; // その間にまた動いた
+  osmLayer.clearLayers();
+  const reg = registeredOsmIds();
+  const c = b.getCenter();
+  const list = osmShopsIn(keys).filter((s) => !reg.has(s.osmId) && b.contains([s.lat, s.lng]));
+  if (list.length > OSM_MAX_SHOWN) {
+    list.sort((x, y) => distanceMeters(c, x) - distanceMeters(c, y));
+    list.length = OSM_MAX_SHOWN;
+  }
+  for (const s of list) {
+    L.marker([s.lat, s.lng], { icon: osmIcon(s), title: s.name }).on('click', () => showOsmCard(s)).addTo(osmLayer);
+  }
+}
+
+const fmtDist = (m) => (m < 1000 ? `${Math.round(m)}m` : `${(m / 1000).toFixed(1)}km`);
+
+function showOsmCard(s) {
+  closeCard();
+  const d = state.pos ? distanceMeters(state.pos, s) : null;
+  card = h('div', { class: 'shopcard' },
+    h('h2', {}, s.name),
+    h('p', { class: 'sub' }, d === null ? '今いる場所は分かりません' : `今いる場所から ${fmtDist(d)}`),
+    h('p', { class: 'muted' }, 'まだ立ち寄っていません'),
+    h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
+      h('button', { class: 'btn primary', type: 'button', onclick: () => checkIn(s) }, '立ち寄って判子を押す'),
+      h('button', { class: 'btn', type: 'button', onclick: () => markClosed(s) }, '閉店していた'),
+      h('button', { class: 'btn', type: 'button', onclick: closeCard }, '閉じる')));
+  document.body.append(card);
+}
+
+const visitedToday = (target) => {
+  const reg = registeredOf(target);
+  return !!reg && state.visits.some((v) => v.shopId === reg.id && todayStr(new Date(v.at)) === todayStr());
+};
+
+// 店を登録する（OSM の店は、立ち寄ったか閉店にしたときに初めて shops に入る。osmId で重複させない）
+async function registerOsm(s, extra = {}) {
+  const shop = { id: db.newId(), osmId: s.osmId, name: s.name, lat: s.lat, lng: s.lng, memo: '', createdAt: Date.now(), ...extra };
+  await db.put('shops', shop);
+  return shop;
+}
+
+async function markClosed(s) {
+  if (!confirm(`「${s.name}」は閉店していましたか？ 地図と知らせから外します。`)) return;
+  const reg = registeredOf(s);
+  if (reg) await db.put('shops', { ...reg, closed: true });
+  else await registerOsm(s, { closed: true });
+  await loadData();
+  closeCard();
+  render();
+  updateNear();
+  toast(`「${s.name}」を外しました`);
+}
+
+// 立ち寄る：位置を取り直して 50m 以内かを確かめ、立ち寄りを保存して判子を押す
+let checking = false;
+async function checkIn(target) {
+  if (checking) return;
+  checking = true;
+  try {
+    // 位置を追っていれば、20秒以内の位置をそのまま使う（測り直すと数秒待たせるため）
+    let pos = state.pos && Date.now() - state.posAt < 20000 ? state.pos : null;
+    if (!pos) { toast('今いる場所を確かめています…'); pos = await getPos(8000, true); }
+    if (!pos) { toast('今いる場所を取得できませんでした'); return; }
+    const d = distanceMeters(pos, target);
+    if (!canCheckIn(d, state.acc)) {
+      const rest = Math.ceil(d - Math.min(state.acc || 0, ACCURACY_CAP) - CHECKIN_METERS);
+      toast(`もう少し近づいてください（あと ${Math.max(1, rest)}m）`);
+      updateNear();
+      return;
+    }
+    const shop = registeredOf(target) || await registerOsm(target);
+    await db.put('visits', { id: db.newId(), shopId: shop.id, at: Date.now(), lat: pos.lat, lng: pos.lng });
+    await loadData();
+    closeCard();
+    drawMap();
+    await celebrate(shop, null);
+    openVisited(shop, shopVisitDays(state.entries, state.visits, shop.id));
+    updateNear();
+  } catch (err) {
+    toast('保存できませんでした：' + (err && err.message ? err.message : err));
+  } finally {
+    checking = false;
+  }
+}
+
+// 判子を押したあとの小さなシート
+function openVisited(shop, n) {
+  showSheet(null, [
+    h('h2', { style: 'font-size:22px;text-align:center;margin:0 0 4px' }, '判子を押しました'),
+    h('p', { class: 'sub', style: 'text-align:center' }, `${shop.name}（${n}回目）`),
+    h('p', { style: 'text-align:center;margin:8px 0 14px' }, '上生菓子を記録する？'),
+    h('div', { style: 'display:flex;gap:8px;justify-content:center' },
+      h('button', { class: 'btn primary', type: 'button', onclick: () => { record.setShop(shop.id); openRecord(); } }, '記録する'),
+      h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'あとで')),
+  ], () => sheetEl.classList.add('small'));
+}
+
+// ---------- 近づいたら知らせる（開いているあいだだけ位置を追う） ----------
+let watchId = null;
+let nearSig = '';
+// 歩いているあいだは地図が自分についてくる。自分で地図を動かしたら 15 秒は止める。シートが開いているときも動かさない
+let lastUserMove = 0;
+function onWatch(p) {
+  state.pos = { lat: p.coords.latitude, lng: p.coords.longitude };
+  state.acc = p.coords.accuracy;
+  state.posAt = Date.now();
+  setPosDot(state.pos);
+  if (mainMap && Date.now() - lastUserMove > 15000 && sheetEl.hidden && !checking) {
+    mainMap.panTo([state.pos.lat, state.pos.lng], { animate: !reduceMotion() });
+  }
+  updateNear();
+}
+function startWatch() {
+  if (watchId !== null || !navigator.geolocation) return;
+  watchId = navigator.geolocation.watchPosition(onWatch, () => {}, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 });
+}
+function stopWatch() {
+  if (watchId === null) return;
+  navigator.geolocation.clearWatch(watchId);
+  watchId = null;
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') startWatch();
+  else stopWatch();
+});
+
+function focusShop(t) {
+  if (!mainMap) return;
+  mainMap.setView([t.lat, t.lng], Math.max(mainMap.getZoom(), 16), { animate: !reduceMotion() });
+  const reg = registeredOf(t);
+  if (reg) showCard(reg);
+  else showOsmCard(t);
+}
+
+// 300m 以内でいちばん近い店（自分の店と OSM の店。閉店にした店は除く）を、お題のカードの下に出す
+async function updateNear() {
+  const pos = state.pos;
+  if (!pos) return;
+  const keys = tilesForBounds(pos.lat - 0.004, pos.lng - 0.005, pos.lat + 0.004, pos.lng + 0.005);
+  await ensureTiles(keys);
+  const reg = registeredOsmIds();
+  const best = nearestShop(pos, [...state.shops, ...osmShopsIn(keys).filter((s) => !reg.has(s.osmId))]);
+  drawNear(best && best.distance <= NEAR_METERS ? best : null);
+}
+
+function drawNear(best) {
+  if (!best) {
+    nearSig = '';
+    nearEl.hidden = true;
+    document.body.classList.remove('hasnear');
+    return;
+  }
+  const { shop, distance } = best;
+  const can = canCheckIn(distance, state.acc);
+  const done = visitedToday(shop);
+  const deg = Math.round(bearingDeg(state.pos, shop) / 10) * 10;
+  const sig = [shop.id || shop.osmId, Math.round(distance / 5), deg, can, done].join('|');
+  if (sig === nearSig && !nearEl.hidden) return; // 変わっていなければ描き直さない（押している最中に消えないように）
+  nearSig = sig;
+  nearEl.replaceChildren(...[
+    h('button', { class: 'nearmain', type: 'button', onclick: () => focusShop(shop) },
+      h('span', { class: 'arrow', style: `transform:rotate(${deg}deg)`, 'aria-hidden': 'true' }, '↑'),
+      h('span', { class: 'nt' }, `${shop.name} まで ${fmtDist(distance)}`)),
+    can && !done ? h('button', { class: 'nearpush', type: 'button', onclick: () => checkIn(shop) }, '立ち寄って判子を押す') : null,
+    can && done ? h('div', { class: 'neardone' }, '今日は押しました') : null].filter(Boolean)); // replaceChildren は null を文字の "null" にしてしまう
+  nearEl.hidden = false;
+  document.body.classList.add('hasnear');
 }
 
 // ---------- 今月のお題（スタンプラリーのカード） ----------
@@ -379,7 +624,13 @@ function drawQuest(popName = null) {
   const p = period(key);
   const q = monthMotifs(state.entries, theme, year, key);
   questEl.style.setProperty('--c', p.color);
-  questEl.onclick = () => openMonth(year, key, closeSheet);
+  questEl.onclick = () => {
+    let intro = null;
+    try { // 初めて開いたときだけ、一言の説明を出す
+      if (!localStorage.getItem('kareki.questHelp')) { localStorage.setItem('kareki.questHelp', '1'); intro = QUEST_HELP; }
+    } catch { /* 保存できなければ出さない */ }
+    openMonth(year, key, closeSheet, intro);
+  };
   questEl.setAttribute('aria-label', `${p.label}のお題 ${q.count}/${q.total}`);
   questEl.replaceChildren(
     h('div', { class: 'qtop' },
@@ -510,7 +761,7 @@ function buildRecord() {
 
   function fillShops() {
     const keep = shopSel.value;
-    const list = sortShopsByDistance(state.shops, state.pos);
+    const list = sortShopsByDistance(state.shops.filter((s) => !s.closed), state.pos);
     shopSel.replaceChildren(
       h('option', { value: '' }, '（店なし・家など）'),
       ...list.map((s) => h('option', { value: s.id }, s.distance === null ? s.name : `${s.name}（${s.distance < 1000 ? Math.round(s.distance) + 'm' : (s.distance / 1000).toFixed(1) + 'km'}）`)),
@@ -672,7 +923,9 @@ function openSettings() {
     h('div', { class: 'setrow' },
       h('h3', {}, '地図の出典'),
       h('p', { class: 'sub' }, '地図タイル：', h('a', { href: 'https://maps.gsi.go.jp/development/ichiran.html', target: '_blank', rel: 'noopener' }, '国土地理院（淡色地図）'),
-        ' ／ 地図表示：Leaflet')),
+        ' ／ 地図表示：Leaflet'),
+      h('p', { class: 'sub' }, '和菓子屋の位置：', h('a', { href: 'https://www.openstreetmap.org/copyright', target: '_blank', rel: 'noopener' }, '© OpenStreetMap contributors'),
+        '（ODbL）。名前から和菓子屋らしい店を選んでいるので、違う店や抜けがあります。')),
     h('div', { class: 'setrow' },
       h('h3', {}, 'このアプリについて'),
       h('p', { class: 'sub' }, '菓暦（かれき）は、上生菓子を食べるたびに記録して12か月の図鑑を埋めるアプリです。データはこの端末のブラウザの中にだけ保存され、外には送りません。'))]);
@@ -713,6 +966,7 @@ const record = buildRecord();
   }
   initMap();
   render();
+  if (document.visibilityState === 'visible') startWatch();
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
