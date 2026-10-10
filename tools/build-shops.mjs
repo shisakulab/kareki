@@ -12,7 +12,7 @@ const CACHE = path.join(root, 'tools', '.cache', 'overpass-jp.json');
 const OUT = path.join(root, 'data', 'shops');
 const ENDPOINT = 'https://overpass-api.de/api/interpreter';
 const HEADERS = {
-  'User-Agent': 'kareki-build-shops/1.2 (https://github.com/shisakulab/kareki)',
+  'User-Agent': 'kareki-build-shops/1.3 (https://github.com/shisakulab/kareki)',
   Accept: 'application/json',
   'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
 };
@@ -113,6 +113,61 @@ for (const el of raw.elements) {
   }
 }
 
+// 住所（市区町村＋町名）を、国土地理院の逆ジオコーダーで調べて付ける。結果は tools/.cache/address.json に残して使い回す
+const ADDR_CACHE = path.join(root, 'tools', '.cache', 'address.json');
+const GSI_UA = { 'User-Agent': HEADERS['User-Agent'] };
+async function loadMuni() {
+  const file = path.join(root, 'tools', '.cache', 'muni.js');
+  let text;
+  if (existsSync(file)) text = await readFile(file, 'utf8');
+  else {
+    const r = await fetch('https://maps.gsi.go.jp/js/muni.js', { headers: GSI_UA });
+    if (!r.ok) throw new Error('muni.js を取得できませんでした：HTTP ' + r.status);
+    text = await r.text();
+    await writeFile(file, text);
+  }
+  const muni = new Map();
+  for (const m of text.matchAll(/MUNI_ARRAY\["(\d+)"\]\s*=\s*'([^']*)'/g)) {
+    const [, pref, , city] = m[2].split(',');
+    muni.set(m[1], { pref, city: (city || '').replace(/[\s　]+/g, '') });
+  }
+  return muni;
+}
+async function addAddresses(rows) {
+  const cache = existsSync(ADDR_CACHE) ? JSON.parse(await readFile(ADDR_CACHE, 'utf8')) : {};
+  const muni = await loadMuni();
+  const todo = rows.filter((r) => !(r[0] in cache));
+  console.log(`住所：キャッシュ ${rows.length - todo.length} 件、新しく調べる ${todo.length} 件`);
+  let n = 0;
+  for (const r of todo) {
+    const url = `https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=${r[2]}&lon=${r[3]}`;
+    let ad = '';
+    for (let tryNo = 0; tryNo < 3; tryNo++) {
+      try {
+        const res = await fetch(url, { headers: GSI_UA });
+        if (res.ok) {
+          const j = await res.json();
+          // 国土地理院の対応表は、都道府県番号 01〜09 の先頭の 0 を省いている（07202 → 7202）
+          const m = j && j.results && (muni.get(j.results.muniCd) || muni.get(String(Number(j.results.muniCd))));
+          ad = m ? `${m.pref}${m.city}${j.results.lv01Nm && j.results.lv01Nm !== '－' ? j.results.lv01Nm : ''}` : '';
+          break;
+        }
+      } catch { /* 少し待って取り直す */ }
+      await sleep(2000);
+    }
+    cache[r[0]] = ad;
+    if (++n % 100 === 0) { console.log(`  住所 ${n}/${todo.length}`); await writeFile(ADDR_CACHE, JSON.stringify(cache)); }
+    await sleep(250); // 相手の負担にならないように、1秒に4件まで
+  }
+  await writeFile(ADDR_CACHE, JSON.stringify(cache));
+  for (const r of rows) {
+    const ad = cache[r[0]];
+    if (!ad) continue;
+    if (r[4]) r[4].ad = ad; else r.push({ ad });
+  }
+}
+await addAddresses(kept);
+
 // 区画ごとに分ける
 const tiles = new Map();
 for (const s of kept) {
@@ -135,6 +190,7 @@ const meta = {
   count: kept.length,
   tiles: [...tiles.keys()].sort(),
   source: '© OpenStreetMap contributors (ODbL) https://www.openstreetmap.org/copyright',
+  address: '住所：国土地理院 逆ジオコーダー（https://maps.gsi.go.jp/）',
 };
 await writeFile(path.join(OUT, 'meta.json'), JSON.stringify(meta));
 bytes += Buffer.byteLength(JSON.stringify(meta));
