@@ -308,3 +308,33 @@ export function classicProgress(entries, theme) {
   }
   return { count: list.filter((c) => c.count > 0).length, total: list.length, classics: list };
 }
+
+// OSM のタグから、店のカードに出す情報を取り出す（ない項目は省く。何もなければ null）
+// web は http(s) のものだけ（javascript: などを通さない）
+export function shopInfo(tags) {
+  const t = tags || {};
+  const out = {};
+  const oh = (t.opening_hours || '').trim();
+  const tel = (t.phone || t['contact:phone'] || '').trim();
+  const web = (t.website || t['contact:website'] || '').trim();
+  if (oh) out.oh = oh.slice(0, 200);
+  if (tel) out.tel = tel.split(';')[0].trim().slice(0, 40);
+  if (/^https?:\/\/[^\s]+$/i.test(web)) out.web = web.slice(0, 300);
+  return Object.keys(out).length ? out : null;
+}
+
+// OSM の opening_hours を日本語の読みやすい形にする（よく使う書き方だけ。読めない部分はそのまま残す）
+const DAY_JA = { Mo: '月', Tu: '火', We: '水', Th: '木', Fr: '金', Sa: '土', Su: '日', PH: '祝' };
+export function formatOpeningHours(oh) {
+  if (!oh) return '';
+  if (oh.trim() === '24/7') return '24時間';
+  return oh.split(';').map((part) => part.trim()).filter(Boolean).map((part) => part
+    .replace(/\b(Mo|Tu|We|Th|Fr|Sa|Su|PH)\b/g, (d) => DAY_JA[d])
+    .replace(/([月火水木金土日祝])-([月火水木金土日祝])/g, '$1〜$2')
+    .replace(/(\d{1,2}:\d{2})-(\d{1,2}:\d{2})/g, '$1–$2')
+    .replace(/(\d{1,2}:\d{2})\+/g, '$1〜')
+    .replace(/\b(off|closed)\b/gi, '定休')
+    .replace(/,/g, '・')
+    .replace(/\(?"([^"]*)"\)?/g, '（$1）'))
+    .join('、');
+}

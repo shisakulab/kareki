@@ -300,3 +300,9 @@ body.hasnear .leaflet-top.leaflet-right { top: calc(var(--safe-t) + 196px); }
 .cell.classic .mt { font-size: 14px; opacity: .6; }
 .classicBox { display: grid; gap: 6px; margin-top: 6px; }
 .classicChip { justify-self: start; }
+
+/* 店のカードの営業時間とリンク */
+.shopcard .hours { margin: 6px 0; font-weight: 600; }
+.shopcard .links { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.shopcard .links .btn { text-decoration: none; display: inline-flex; align-items: center; color: var(--ink); }
+.shopcard .osmnote { font-size: 12px; opacity: .7; margin: 0 0 10px; }

@@ -3,7 +3,7 @@ import * as db from './db.js';
 import {
   todayStr, monthKeyOf, yearOf, yearSummary, motifProgress, canonicalMotif, isVerified, sortShopsByDistance,
   groupByDay, clampScore, classicProgress, classicOf, classifyClassic, shopStats, fitSize, shopStamp, monthMotifs,
-  distanceMeters, tilesForBounds, nearestShop, bearingDeg, canCheckIn, shopVisitDays, searchShops,
+  distanceMeters, tilesForBounds, nearestShop, bearingDeg, canCheckIn, shopVisitDays, searchShops, tileKey, formatOpeningHours,
   NEAR_METERS, CHECKIN_METERS, ACCURACY_CAP,
 } from './logic.js';
 
@@ -432,6 +432,7 @@ function showCard(shop) {
     sorted.length
       ? h('ul', { class: 'list' }, sorted.map((e) => h('li', {}, recRow(e, false))))
       : h('p', { class: 'muted' }, 'まだ記録がありません'),
+    shopLinks(shop),
     h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
       h('button', { class: 'btn primary', type: 'button', onclick: () => { record.setShop(shop.id); closeCard(); openRecord(); } }, 'ここで記録する'),
       h('button', { class: 'btn', type: 'button', onclick: () => checkIn(shop) }, '立ち寄る'),
@@ -455,7 +456,7 @@ function loadTile(key) {
       .catch(() => null) // 通信の失敗は覚えない（次にまた試す）
       .then((list) => {
         tilePending.delete(key);
-        if (list) tiles.set(key, list.map(([osmId, name, lat, lng]) => ({ osmId, name, lat, lng })));
+        if (list) tiles.set(key, list.map(([osmId, name, lat, lng, info]) => ({ osmId, name, lat, lng, info: info || null })));
       }));
   }
   return tilePending.get(key);
@@ -502,6 +503,27 @@ async function refreshOsm() {
 
 const fmtDist = (m) => (m < 1000 ? `${Math.round(m)}m` : `${(m / 1000).toFixed(1)}km`);
 
+// 店のカードの下に出す情報：OSM の営業時間・電話・Web サイト（ある店だけ）と、Google マップで開くリンク
+function osmInfoOf(shop) {
+  if (shop.info) return shop.info;
+  if (!shop.osmId) return null;
+  const list = tiles.get(tileKey(shop.lat, shop.lng)) || [];
+  const hit = list.find((x) => x.osmId === shop.osmId);
+  return hit ? hit.info : null;
+}
+function shopLinks(shop) {
+  const info = osmInfoOf(shop);
+  const gmap = `https://www.google.com/maps/search/${encodeURIComponent(shop.name)}/@${shop.lat},${shop.lng},18z`;
+  const rows = [];
+  if (info && info.oh) rows.push(h('p', { class: 'hours' }, '営業時間：' + formatOpeningHours(info.oh)));
+  const links = [h('a', { class: 'btn', href: gmap, target: '_blank', rel: 'noopener' }, 'Google マップで開く')];
+  if (info && info.tel) links.push(h('a', { class: 'btn', href: 'tel:' + info.tel.replace(/[^\d+]/g, '') }, '電話'));
+  if (info && info.web) links.push(h('a', { class: 'btn', href: info.web, target: '_blank', rel: 'noopener' }, 'Web サイト'));
+  rows.push(h('div', { class: 'links' }, links));
+  if (info) rows.push(h('p', { class: 'osmnote' }, 'OpenStreetMap の情報です（古い場合があります）。営業時間は Google マップでも確かめてください'));
+  return rows;
+}
+
 function showOsmCard(s) {
   closeCard();
   const d = state.pos ? distanceMeters(state.pos, s) : null;
@@ -509,6 +531,7 @@ function showOsmCard(s) {
     h('h2', {}, s.name),
     h('p', { class: 'sub' }, d === null ? '今いる場所は分かりません' : `今いる場所から ${fmtDist(d)}`),
     h('p', { class: 'muted' }, 'まだ立ち寄っていません'),
+    shopLinks(s),
     h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
       h('button', { class: 'btn primary', type: 'button', onclick: () => checkIn(s) }, '立ち寄って判子を押す'),
       h('button', { class: 'btn', type: 'button', onclick: () => markClosed(s) }, '閉店していた'),

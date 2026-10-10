@@ -5,7 +5,7 @@ import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { isWagashiShop, tileKey } from '../logic.js';
+import { isWagashiShop, tileKey, shopInfo } from '../logic.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CACHE = path.join(root, 'tools', '.cache', 'overpass-jp.json');
@@ -104,7 +104,10 @@ for (const el of raw.elements) {
   seen.add(id);
   const name = (tags.name || tags['name:ja'] || '').trim();
   if (isWagashiShop(tags)) {
-    kept.push([id, name, Math.round(lat * 1e5) / 1e5, Math.round(lng * 1e5) / 1e5]);
+    const row = [id, name, Math.round(lat * 1e5) / 1e5, Math.round(lng * 1e5) / 1e5];
+    const info = shopInfo(tags); // 営業時間・電話・Web サイト（ある店だけ5番目に付ける）
+    if (info) row.push(info);
+    kept.push(row);
   } else {
     dropped.push({ name: name || '(名前なし)', shop: tags.shop || tags.amenity });
   }

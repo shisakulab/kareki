@@ -330,3 +330,15 @@ test('classicProgress: 同じ定番は1種、定番でない記録は数えな�
   assert.equal(d.count, 2);
   assert.equal(d.best.sweetName, '三笠');
 });
+
+test('shopInfo / formatOpeningHours: OSM の店の情報', async () => {
+  const { shopInfo, formatOpeningHours } = await import('../logic.js');
+  assert.equal(shopInfo({ name: 'x' }), null);
+  assert.deepEqual(shopInfo({ opening_hours: 'Mo-Fr 10:00-18:00', phone: '+81 3-1234-5678;+81 3-0000-0000', website: 'https://example.jp/' }),
+    { oh: 'Mo-Fr 10:00-18:00', tel: '+81 3-1234-5678', web: 'https://example.jp/' });
+  assert.deepEqual(shopInfo({ website: 'javascript:alert(1)' }), null);
+  assert.equal(formatOpeningHours('Mo-Fr 10:00-18:00;Sa 10:00-17:00'), '月〜金 10:00–18:00、土 10:00–17:00');
+  assert.equal(formatOpeningHours('Tu off'), '火 定休');
+  assert.equal(formatOpeningHours('Mo-Tu,Th-Su 09:00+ ("closes when sold out!"); We off'), '月〜火・木〜日 09:00〜 （closes when sold out!）、水 定休');
+  assert.equal(formatOpeningHours('24/7'), '24時間');
+});
