@@ -251,7 +251,7 @@ function openZukan() {
       if (c.best.photoId) { cls.push('photo'); kids.push(imgFor(c.best.photoId, '')); }
       kids.push(h('div', { class: 'mo' }, p.label));
       if (!c.best.photoId) kids.push(h('div', { class: 'nm' }, c.best.sweetName));
-      kids.push(h('div', { class: 'stamp' + (c.best.verified ? ' ring' : '') }, c.count));
+      kids.push(h('div', { class: 'stamp' }, c.count));
     } else {
       kids.push(h('div', { class: 'mo' }, p.label));
       kids.push(h('div', { class: 'mt' }, `${p.quests[0].name}…`));
@@ -268,7 +268,7 @@ function openZukan() {
       if (c.best.photoId) { cls.push('photo'); kids.push(imgFor(c.best.photoId, '')); }
       kids.push(h('div', { class: 'mo' }, c.name));
       if (!c.best.photoId) kids.push(h('div', { class: 'nm' }, c.best.sweetName));
-      kids.push(h('div', { class: 'stamp' + (c.best.verified ? ' ring' : '') }, c.count));
+      kids.push(h('div', { class: 'stamp' }, c.count));
     } else {
       kids.push(h('div', { class: 'mt' }, c.name));
     }
@@ -349,7 +349,7 @@ function recRow(e, withDelete) {
   return h('div', { class: 'rec' + (e.photoId ? '' : ' nophoto') },
     e.photoId ? imgFor(e.photoId, 'ph') : null,
     h('div', { style: 'min-width:0' },
-      h('div', { class: 't' }, e.sweetName, e.verified ? h('span', { class: 'badge', title: 'その場で記録' }, '場') : null),
+      h('div', { class: 't' }, e.sweetName),
       h('div', { class: 'n' }, meta),
       note ? h('div', { class: 'n' }, note) : null),
     withDelete ? h('button', { class: 'ibtn', type: 'button', 'aria-label': '削除', style: 'font-size:14px', onclick: () => deleteEntry(e) }, '削除') : null);

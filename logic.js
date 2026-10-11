@@ -123,7 +123,7 @@ export function fitSize(w, h, max = PHOTO_MAX) {
 }
 
 // 判子（店のマーカー）の中身。色は最近の記録・立ち寄りの月、字は最近のモチーフ（なければ店名）の1文字目
-// 回数は、記録か立ち寄りがあった日数。二重の縁（verified）は、立ち寄りか、その場での記録が1つでもあるとき
+// 回数は、記録か立ち寄りがあった日数。二重の縁（verified）は、立ち寄りの判子が1つでもあるとき
 export function shopStamp(shop, entries, theme, visits = []) {
   const st = shopStats(shop.id, entries);
   const myVisits = visits.filter((v) => v.shopId === shop.id);
@@ -144,7 +144,7 @@ export function shopStamp(shop, entries, theme, visits = []) {
   const text = (marked && glyphOf(marked)) || shop.name;
   return {
     empty: false, visits: shopVisitDays(entries, visits, shop.id), color: p ? p.color : null, glyph: [...text][0] || '',
-    verified: myVisits.length > 0 || st.entries.some((e) => e.verified),
+    verified: myVisits.length > 0, // 店に行った証拠は「立ち寄って判子を押す」だけ
     photoId: latestPhotoId(st.entries), // その店で最後に撮った写真（判子の中に入れる）
   };
 }

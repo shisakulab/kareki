@@ -142,7 +142,7 @@ test('canonicalMotif: 別名をモチーフにそろえる。別名の行き先�
   assert.deepEqual(p.collected, ['端午']);
 });
 
-test('shopStamp: 色は最近の月・字は最近のモチーフ・回数・場の有無・未記録', () => {
+test('shopStamp: 色は最近の月・字は最近のモチーフ・回数・立ち寄りで二重の縁・未記録', () => {
   const shop = { id: 's', name: '虎屋' };
   assert.equal(shopStamp(shop, [], theme).empty, true);
   const es = [
@@ -151,7 +151,8 @@ test('shopStamp: 色は最近の月・字は最近のモチーフ・回数・場
     { shopId: 'x', date: '2026-11-02', motif: '柿', verified: true },
   ];
   const s = shopStamp(shop, es, theme);
-  assert.deepEqual([s.empty, s.visits, s.glyph, s.verified], [false, 2, '栗', true]);
+  assert.deepEqual([s.empty, s.visits, s.glyph, s.verified], [false, 2, '栗', false]); // 記録だけでは二重の縁にしない
+  assert.equal(shopStamp(shop, es, theme, [{ shopId: 's', at: Date.parse('2026-10-03') }]).verified, true); // 立ち寄りの判子があれば二重
   assert.equal(s.color, theme.periods[9].color);
   const noMotif = shopStamp(shop, [{ shopId: 's', date: '2026-10-02', motif: null, verified: false }], theme);
   assert.deepEqual([noMotif.glyph, noMotif.verified], ['虎', false]);

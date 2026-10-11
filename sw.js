@@ -1,6 +1,6 @@
 // キャッシュ優先。ファイルを変えたら VERSION を上げる
 // Leaflet は vendor/ に同梱。地図タイルはキャッシュしない。data/shops/ は取得時にキャッシュ
-const VERSION = 'kareki-v16';
+const VERSION = 'kareki-v17';
 const FILES = [
   './',
   './index.html',
