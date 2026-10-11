@@ -618,6 +618,8 @@ async function markClosed(s) {
 let checking = false;
 async function checkIn(target) {
   if (checking) return;
+  // 同じ店の立ち寄りの判子は1日1回。二度目は知らせるだけ
+  if (visitedToday(target)) { toast('この店の判子は今日もう押してあります'); return; }
   checking = true;
   try {
     // 位置を追っていれば、20秒以内の位置をそのまま使う（測り直すと数秒待たせるため）
@@ -784,8 +786,8 @@ function drawNear(best) {
     h('button', { class: 'nearmain', type: 'button', onclick: () => focusShop(shop) },
       h('span', { class: 'arrow', style: `transform:rotate(${deg}deg)`, 'aria-hidden': 'true' }, '↑'),
       h('span', { class: 'nt' }, `${shop.name} まで ${fmtDist(distance)}`)),
-    can && !done ? h('button', { class: 'nearpush', type: 'button', onclick: () => checkIn(shop) }, '立ち寄って判子を押す') : null,
-    can && done ? h('div', { class: 'neardone' }, '今日は押しました') : null].filter(Boolean)); // replaceChildren は null を文字の "null" にしてしまう
+    // 今日もう押した店では、ボタンも「押しました」も出さず、店名と距離だけにする
+    can && !done ? h('button', { class: 'nearpush', type: 'button', onclick: () => checkIn(shop) }, '立ち寄って判子を押す') : null].filter(Boolean)); // replaceChildren は null を文字の "null" にしてしまう
   nearEl.hidden = false;
   document.body.classList.add('hasnear');
 }
