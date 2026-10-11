@@ -43,26 +43,6 @@ export function yearSummary(entries, year) {
   return { filled: months.filter((c) => c.count > 0).length, months };
 }
 
-// 入力されたモチーフを、テーマの一覧の名前にそろえる（別名もここで寄せる）。空なら null
-export function canonicalMotif(text, theme) {
-  const t = (text || '').trim();
-  if (!t) return null;
-  return (theme.aliases && theme.aliases[t]) || t;
-}
-
-// 通算で集めたモチーフ。一覧にない自由入力は数えない。names は モチーフ→最新の品名
-export function motifProgress(entries, theme) {
-  const all = new Set(theme.periods.flatMap((p) => p.motifs));
-  const names = {};
-  const sorted = [...entries].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-  for (const e of sorted) {
-    const m = canonicalMotif(e.motif, theme);
-    if (m && all.has(m)) names[m] = e.sweetName;
-  }
-  const collected = Object.keys(names);
-  return { collected, names, count: collected.length, total: all.size };
-}
-
 // 2点間の距離（m）。{lat, lng}
 export function distanceMeters(a, b) {
   const R = 6371008.8;
@@ -122,7 +102,7 @@ export function fitSize(w, h, max = PHOTO_MAX) {
   return { w: Math.round(w * k), h: Math.round(h * k) };
 }
 
-// 判子（店のマーカー）の中身。色は最近の記録・立ち寄りの月、字は最近のモチーフ（なければ店名）の1文字目
+// 判子（店のマーカー）の中身。色は最近の記録・立ち寄りの月、字は最近のお題（なければ店名）の1文字目
 // 回数は、記録か立ち寄りがあった日数。二重の縁（verified）は、立ち寄りの判子が1つでもあるとき
 export function shopStamp(shop, entries, theme, visits = []) {
   const st = shopStats(shop.id, entries);
@@ -132,13 +112,11 @@ export function shopStamp(shop, entries, theme, visits = []) {
   const lastVisit = myVisits.reduce((m, v) => { const d = todayStr(new Date(v.at)); return d > m ? d : m; }, '');
   const latestDate = lastEntry > lastVisit ? lastEntry : lastVisit;
   const p = theme.periods.find((x) => x.key === monthKeyOf(latestDate));
-  // 字：いちばん新しい「お題の季節の和菓子」か「上生菓子の題材」の判子の字。どちらもなければ店名の1文字目
+  // 字：いちばん新しい「お題の季節の和菓子」の判子の字。なければ店名の1文字目
   const glyphOf = (e) => {
     const qk = questOf(e, theme);
     const q = qk ? theme.periods.flatMap((x) => x.quests || []).find((x) => x.key === qk) : null;
-    if (q) return q.glyph || [...q.name][0];
-    const m = canonicalMotif(e.motif, theme);
-    return m ? [...m][0] : null;
+    return q ? (q.glyph || [...q.name][0]) : null;
   };
   const marked = st.entries.filter((e) => glyphOf(e)).reduce((m, e) => (!m || e.date > m.date || (e.date === m.date && (e.createdAt || 0) > (m.createdAt || 0)) ? e : m), null);
   const text = (marked && glyphOf(marked)) || shop.name;
@@ -147,22 +125,6 @@ export function shopStamp(shop, entries, theme, visits = []) {
     verified: myVisits.length > 0, // 店に行った証拠は「立ち寄って判子を押す」だけ
     photoId: latestPhotoId(st.entries), // その店で最後に撮った写真（判子の中に入れる）
   };
-}
-
-// その年・その月のお題：モチーフ5つそれぞれが集まったか（一覧にない自由入力は数えない）
-export function monthMotifs(entries, theme, year, key) {
-  const p = theme.periods.find((x) => x.key === key);
-  if (!p) return { motifs: [], count: 0, total: 0, done: false };
-  const got = new Set();
-  for (const e of entries) {
-    if (yearOf(e.date) !== year || monthKeyOf(e.date) !== key) continue;
-    const m = canonicalMotif(e.motif, theme);
-    if (m) got.add(m);
-  }
-  const photoOf = (name) => latestPhotoId(entries.filter((e) => yearOf(e.date) === year && monthKeyOf(e.date) === key && canonicalMotif(e.motif, theme) === name));
-  const motifs = p.motifs.map((name) => ({ name, got: got.has(name), photoId: got.has(name) ? photoOf(name) : null }));
-  const count = motifs.filter((m) => m.got).length;
-  return { motifs, count, total: motifs.length, done: count === motifs.length };
 }
 
 // ---------- v1.2 近くの和菓子屋 ----------
@@ -395,7 +357,7 @@ export function questOf(entry, theme) {
   return entry.quest !== undefined ? entry.quest : classifyQuest(entry.sweetName, theme, monthKeyOf(entry.date));
 }
 
-// その年・その月のお題：季節の和菓子4つ＋上生菓子の枠（kind: 'joumi'、key 'joumi'）。5つの丸の状態
+// その年・その月のお題：季節の和菓子4つの丸の状態
 export function monthQuests(entries, theme, year, key) {
   const p = theme.periods.find((x) => x.key === key);
   if (!p) return { quests: [], count: 0, total: 0, done: false };
@@ -404,27 +366,17 @@ export function monthQuests(entries, theme, year, key) {
     const hit = inMonth.filter((e) => questOf(e, theme) === q.key);
     return { key: q.key, kind: 'quest', name: q.name, hint: q.hint, glyph: q.glyph || [...q.name][0], got: hit.length > 0, photoId: latestPhotoId(hit) };
   });
-  const motifHit = inMonth.filter((e) => p.motifs.includes(canonicalMotif(e.motif, theme)));
-  const last = motifHit.reduce((m, e) => (!m || e.date > m.date || (e.date === m.date && (e.createdAt || 0) > (m.createdAt || 0)) ? e : m), null);
-  quests.push({
-    key: 'joumi', kind: 'joumi', name: '上生菓子', got: motifHit.length > 0,
-    motifName: last ? canonicalMotif(last.motif, theme) : null, photoId: latestPhotoId(motifHit),
-    glyph: last ? [...canonicalMotif(last.motif, theme)][0] : '上',
-  });
   const count = quests.filter((q) => q.got).length;
   return { quests, count, total: quests.length, done: count === quests.length };
 }
 
-// お題の通算：季節の和菓子48（年をまたいで1度でも）＋上生菓子の枠12（その月の題材を1つでも記録した月）
+// お題の通算：季節の和菓子48（年をまたいで1度でも）
 export function questProgress(entries, theme) {
   const all = new Set(theme.periods.flatMap((p) => (p.quests || []).map((q) => q.key)));
   const got = new Set();
-  const months = new Set();
   for (const e of entries) {
     const k = questOf(e, theme);
     if (k && all.has(k)) got.add(k);
-    const p = theme.periods.find((x) => x.key === monthKeyOf(e.date));
-    if (p && p.motifs.includes(canonicalMotif(e.motif, theme))) months.add(p.key);
   }
-  return { count: got.size + months.size, total: all.size + theme.periods.length, quests: got.size, joumi: months.size };
+  return { count: got.size, total: all.size, quests: got.size };
 }
