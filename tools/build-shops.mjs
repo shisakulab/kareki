@@ -3,6 +3,7 @@
 //   node tools/build-shops.mjs --refresh  問い合わせ直す
 import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { inflateRawSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { isWagashiShop, tileKey, shopInfo } from '../logic.js';
@@ -113,58 +114,126 @@ for (const el of raw.elements) {
   }
 }
 
-// 住所（市区町村＋町名）を、国土地理院の逆ジオコーダーで調べて付ける。結果は tools/.cache/address.json に残して使い回す
-const ADDR_CACHE = path.join(root, 'tools', '.cache', 'address.json');
-const GSI_UA = { 'User-Agent': HEADERS['User-Agent'] };
-async function loadMuni() {
-  const file = path.join(root, 'tools', '.cache', 'muni.js');
-  let text;
-  if (existsSync(file)) text = await readFile(file, 'utf8');
-  else {
-    const r = await fetch('https://maps.gsi.go.jp/js/muni.js', { headers: GSI_UA });
-    if (!r.ok) throw new Error('muni.js を取得できませんでした：HTTP ' + r.status);
-    text = await r.text();
-    await writeFile(file, text);
-  }
-  const muni = new Map();
-  for (const m of text.matchAll(/MUNI_ARRAY\["(\d+)"\]\s*=\s*'([^']*)'/g)) {
-    const [, pref, , city] = m[2].split(',');
-    muni.set(m[1], { pref, city: (city || '').replace(/[\s　]+/g, '') });
-  }
-  return muni;
-}
-async function addAddresses(rows) {
-  const cache = existsSync(ADDR_CACHE) ? JSON.parse(await readFile(ADDR_CACHE, 'utf8')) : {};
-  const muni = await loadMuni();
-  const todo = rows.filter((r) => !(r[0] in cache));
-  console.log(`住所：キャッシュ ${rows.length - todo.length} 件、新しく調べる ${todo.length} 件`);
-  let n = 0;
-  for (const r of todo) {
-    const url = `https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=${r[2]}&lon=${r[3]}`;
-    let ad = '';
-    for (let tryNo = 0; tryNo < 3; tryNo++) {
-      try {
-        const res = await fetch(url, { headers: GSI_UA });
-        if (res.ok) {
-          const j = await res.json();
-          // 国土地理院の対応表は、都道府県番号 01〜09 の先頭の 0 を省いている（07202 → 7202）
-          const m = j && j.results && (muni.get(j.results.muniCd) || muni.get(String(Number(j.results.muniCd))));
-          ad = m ? `${m.pref}${m.city}${j.results.lv01Nm && j.results.lv01Nm !== '－' ? j.results.lv01Nm : ''}` : '';
-          break;
-        }
-      } catch { /* 少し待って取り直す */ }
-      await sleep(2000);
+// 住所（都道府県＋市区町村＋大字町丁目）を、国土交通省「位置参照情報」の代表点のうち最も近いものから付ける。
+// ダウンロードした ZIP は tools/.cache/isj/ に残して使い回す
+const ISJ_DIR = path.join(root, 'tools', '.cache', 'isj');
+const ISJ_UA = { 'User-Agent': HEADERS['User-Agent'] };
+const MAX_ADDR_M = 2000; // これより遠い店には住所を付けない
+
+// ZIP から指定の拡張子のファイルを取り出す（標準の zlib だけ。中央ディレクトリを読む）
+function unzipFirst(buf, ext) {
+  let eocd = buf.length - 22;
+  while (eocd >= 0 && buf.readUInt32LE(eocd) !== 0x06054b50) eocd--;
+  if (eocd < 0) throw new Error('ZIP の終端が見つかりません');
+  const count = buf.readUInt16LE(eocd + 10);
+  let p = buf.readUInt32LE(eocd + 16);
+  for (let i = 0; i < count; i++) {
+    const method = buf.readUInt16LE(p + 10);
+    const csize = buf.readUInt32LE(p + 20);
+    const nameLen = buf.readUInt16LE(p + 28);
+    const extraLen = buf.readUInt16LE(p + 30);
+    const commentLen = buf.readUInt16LE(p + 32);
+    const local = buf.readUInt32LE(p + 42);
+    const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
+    if (name.toLowerCase().endsWith(ext)) {
+      const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+      const data = buf.subarray(start, start + csize);
+      return method === 0 ? data : inflateRawSync(data);
     }
-    cache[r[0]] = ad;
-    if (++n % 100 === 0) { console.log(`  住所 ${n}/${todo.length}`); await writeFile(ADDR_CACHE, JSON.stringify(cache)); }
-    await sleep(250); // 相手の負担にならないように、1秒に4件まで
+    p += 46 + nameLen + extraLen + commentLen;
   }
-  await writeFile(ADDR_CACHE, JSON.stringify(cache));
+  throw new Error('ZIP に ' + ext + ' がありません');
+}
+
+// 都道府県ごとの CSV（Shift_JIS）を読み、[都道府県, 市区町村, 大字町丁目, 緯度, 経度] の一覧にする
+async function loadIsjPoints() {
+  await mkdir(ISJ_DIR, { recursive: true });
+  const dec = new TextDecoder('shift_jis');
+  const points = [];
+  for (let n = 1; n <= 47; n++) {
+    const code = String(n).padStart(2, '0');
+    const file = path.join(ISJ_DIR, `${code}000-18.0b.zip`);
+    if (!existsSync(file)) {
+      const url = `https://nlftp.mlit.go.jp/isj/dls/data/18.0b/${code}000-18.0b.zip`;
+      const res = await fetch(url, { headers: ISJ_UA });
+      if (!res.ok) throw new Error(`位置参照情報を取得できませんでした：${url} HTTP ${res.status}`);
+      await writeFile(file, Buffer.from(await res.arrayBuffer()));
+      console.log('  ダウンロード ' + code);
+      await sleep(1000);
+    }
+    const text = dec.decode(unzipFirst(await readFile(file), '.csv'));
+    const lines = text.split(/\r?\n/);
+    // 列：都道府県コード, 都道府県名, 市区町村コード, 市区町村名, 大字町丁目コード, 大字町丁目名, 緯度, 経度, 原典資料コード, 区分コード
+    for (let i = 1; i < lines.length; i++) {
+      if (!lines[i]) continue;
+      const c = lines[i].split(',').map((x) => x.replace(/^"|"$/g, ''));
+      const lat = Number(c[6]);
+      const lng = Number(c[7]);
+      if (!c[5] || !Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      points.push([c[1], c[3], c[5], lat, lng]);
+    }
+  }
+  return points;
+}
+
+// 緯度経度 0.02 度の格子で索引を作る
+const CELL = 0.02;
+const cellKey = (iy, ix) => iy + '_' + ix;
+function buildGrid(points) {
+  const grid = new Map();
+  for (const pt of points) {
+    const k = cellKey(Math.floor(pt[3] / CELL), Math.floor(pt[4] / CELL));
+    if (!grid.has(k)) grid.set(k, []);
+    grid.get(k).push(pt);
+  }
+  return grid;
+}
+function meters(lat1, lng1, lat2, lng2) {
+  const dy = (lat2 - lat1) * 111320;
+  const dx = (lng2 - lng1) * 111320 * Math.cos(((lat1 + lat2) / 2) * Math.PI / 180);
+  return Math.hypot(dx, dy);
+}
+// 周囲 ±2 マス（最短でも 3.6km 以上）を調べるので、2km 以内の点は必ず見つかる
+function nearest(grid, lat, lng) {
+  const iy = Math.floor(lat / CELL);
+  const ix = Math.floor(lng / CELL);
+  let best = null;
+  let bestD = Infinity;
+  for (let dy = -2; dy <= 2; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      const list = grid.get(cellKey(iy + dy, ix + dx));
+      if (!list) continue;
+      for (const pt of list) {
+        const d = meters(lat, lng, pt[3], pt[4]);
+        if (d < bestD) { bestD = d; best = pt; }
+      }
+    }
+  }
+  return best && bestD <= MAX_ADDR_M ? { pt: best, d: bestD } : null;
+}
+
+const addrDistances = [];
+async function addAddresses(rows) {
+  console.log('位置参照情報を読みます');
+  const points = await loadIsjPoints();
+  const grid = buildGrid(points);
+  console.log(`代表点 ${points.length} 件`);
   for (const r of rows) {
-    const ad = cache[r[0]];
-    if (!ad) continue;
-    if (r[4]) r[4].ad = ad; else r.push({ ad });
+    const hit = nearest(grid, r[2], r[3]);
+    if (!hit) continue;
+    addrDistances.push(hit.d);
+    // ad：都道府県＋市区町村（ほぼ確実）。tn：いちばん近い代表点の大字・町丁目（隣の町になることがあるので、画面では「付近」と出す）
+    const ad = hit.pt[0] + hit.pt[1];
+    const tn = hit.pt[2] || '';
+    const info = r[4] || {};
+    info.ad = ad;
+    if (tn) info.tn = tn;
+    if (!r[4]) r.push(info);
   }
+  addrDistances.sort((a, b) => a - b);
+  const med = addrDistances[Math.floor(addrDistances.length / 2)] || 0;
+  const max = addrDistances[addrDistances.length - 1] || 0;
+  console.log(`住所：付いた ${addrDistances.length} 件 / 付かない ${rows.length - addrDistances.length} 件、距離の中央値 ${med.toFixed(0)}m、最大 ${max.toFixed(0)}m`);
 }
 await addAddresses(kept);
 
@@ -190,7 +259,7 @@ const meta = {
   count: kept.length,
   tiles: [...tiles.keys()].sort(),
   source: '© OpenStreetMap contributors (ODbL) https://www.openstreetmap.org/copyright',
-  address: '住所：国土地理院 逆ジオコーダー（https://maps.gsi.go.jp/）',
+  address: '住所：『位置参照情報ダウンロードサービス』（国土交通省）（https://nlftp.mlit.go.jp/isj/ ）をもとに shisaku_lab が作成（公共データ利用規約 PDL1.0）',
 };
 await writeFile(path.join(OUT, 'meta.json'), JSON.stringify(meta));
 bytes += Buffer.byteLength(JSON.stringify(meta));

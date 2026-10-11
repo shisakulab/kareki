@@ -554,17 +554,19 @@ function osmInfoOf(shop) {
   return hit ? hit.info : null;
 }
 // 住所（国土地理院の逆ジオコーダーで調べて同梱したもの）。自分で追加した店にはない
+// 町名は、いちばん近い代表点から選んだもので隣の町になることがあるため「付近」を付ける
 function addressOf(shop) {
   const info = osmInfoOf(shop);
-  return info && info.ad ? info.ad : '';
+  if (!info || !info.ad) return '';
+  return info.tn ? `${info.ad} ${info.tn}付近` : info.ad;
 }
 function shopLinks(shop) {
   const info = osmInfoOf(shop);
   // Google の公式のリンク形式（Maps URLs）。住所があれば「店名＋町名」、なければ店の位置で開く
-  const query = info && info.ad ? `${shop.name} ${info.ad}` : `${shop.lat},${shop.lng}`;
+  const query = info && info.ad ? `${shop.name} ${info.ad}` : `${shop.lat},${shop.lng}`; // 市区町村まで（確実な部分）
   const gmap = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
   const rows = [];
-  if (info && info.ad) rows.push(h('p', { class: 'addr' }, info.ad));
+  if (info && info.ad) rows.push(h('p', { class: 'addr' }, addressOf(shop)));
   if (info && info.oh) rows.push(h('p', { class: 'hours' }, '営業時間：' + formatOpeningHours(info.oh)));
   const links = [h('a', { class: 'btn', href: gmap, target: '_blank', rel: 'noopener' }, 'Google マップで開く')];
   if (info && info.web) links.push(h('a', { class: 'btn', href: info.web, target: '_blank', rel: 'noopener' }, 'Web サイト'));
@@ -1161,7 +1163,7 @@ function openSettings() {
         '（ODbL）。名前から和菓子屋らしい店を選んでいるので、違う店や抜けがあります。')),
     h('div', { class: 'setrow' },
       h('h3', {}, 'このアプリについて'),
-      h('p', { class: 'sub' }, '菓暦（かれき）は、和菓子の図鑑です。どら焼きや大福などの定番、毎月の季節の和菓子、上生菓子を、食べるたびに記録して埋めるアプリです。データはこの端末のブラウザの中にだけ保存され、外には送りません。'))]);
+      h('p', { class: 'sub' }, '菓暦（かれき）は、和菓子の図鑑です。どら焼きや大福などの定番、毎月の季節の和菓子、上生菓子を、食べるたびに記録して埋めるアプリです。データはこの端末のブラウザの中にだけ保存され、外には送りません。ただし地図の画像は国土地理院から読み込むので、見ている地図の範囲は国土地理院のサーバーに伝わります。'))]);
 }
 
 // ---------- データを守る ----------
@@ -1230,7 +1232,7 @@ function openWelcome(done) {
       h('li', {}, '和菓子を食べたら「＋」で記録します。どら焼きや大福などの定番も、季節の和菓子も、上生菓子も、和菓子の図鑑に入ります。'),
       h('li', {}, '上の「今月のお題」は、旬や行事の季節の和菓子4つと、上生菓子の枠1つです。5つ集めると満願です。'),
       h('li', {}, '地図の点線の丸は、近くの和菓子屋です。店の50m以内で「立ち寄って判子を押す」が押せます。'),
-      h('li', {}, '位置情報は、近くの店を知らせて判子を押すためだけに使います。記録も位置も、このスマホの中にだけ保存し、外には送りません。'),
+      h('li', {}, '位置情報は、近くの店を知らせて判子を押すためだけに使います。記録も位置も、このスマホの中にだけ保存し、外には送りません（地図の画像は国土地理院から読み込みます）。'),
       isStandalone() ? null : h('li', {}, 'ホーム画面に追加すると、アプリのように開けて、データも消えにくくなります（iPhone は Safari の共有ボタン →「ホーム画面に追加」）。')),
     h('button', { class: 'btn primary', type: 'button', style: 'width:100%;margin-top:8px', onclick: finish }, 'はじめる'),
   ]);
