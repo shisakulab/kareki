@@ -1,7 +1,7 @@
 {
   "name": "菓暦",
   "short_name": "菓暦",
-  "description": "上生菓子と、どら焼きなど定番の和菓子の図鑑。食べるたびに記録して埋める",
+  "description": "和菓子の図鑑。どら焼き・大福・季節の和菓子を記録して、和菓子屋をめぐって判子を集める",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

@@ -2,7 +2,7 @@ import theme from './themes/jonamagashi.js';
 import * as db from './db.js';
 import {
   todayStr, monthKeyOf, yearOf, yearSummary, motifProgress, canonicalMotif, isVerified, sortShopsByDistance,
-  groupByDay, clampScore, classicProgress, classicOf, classifyClassic, shopStats, fitSize, shopStamp, monthMotifs,
+  groupByDay, clampScore, classicProgress, classicOf, classifyClassic, shopStats, fitSize, shopStamp, monthQuests, questProgress, classifyQuest, questOf,
   distanceMeters, tilesForBounds, nearestShop, bearingDeg, canCheckIn, shopVisitDays, searchShops, tileKey, formatOpeningHours, shouldRemindBackup,
   NEAR_METERS, CHECKIN_METERS, ACCURACY_CAP,
 } from './logic.js';
@@ -12,7 +12,7 @@ const GSI_ATTR = '<a href="https://maps.gsi.go.jp/development/ichiran.html" targ
 const TOKYO = { lat: 35.681236, lng: 139.767125 };
 const OSM_ATTR = '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>';
 const NEUTRAL = '#8a8178';
-const QUEST_HELP = '上生菓子は、季節を形と色で表すお菓子です。今月のお題に合う上生菓子をお店で見つけて記録すると、判子が押されます。';
+const QUEST_HELP = '毎月のお題は、旬の素材や行事にちなんだ季節の和菓子4つと、上生菓子の枠1つです。お店で見つけて記録すると、判子が押されます。';
 
 const mapEl = document.getElementById('map');
 const questEl = document.getElementById('quest');
@@ -24,7 +24,7 @@ const sheetBody = document.getElementById('sheetbody');
 const grabEl = document.getElementById('grab');
 const toastEl = document.getElementById('toast');
 
-const state = { zukanTab: 'season', year: new Date().getFullYear(), shops: [], entries: [], visits: [], pos: null, acc: null, posAt: 0, maps: [] };
+const state = { zukanTab: 'classic', year: new Date().getFullYear(), shops: [], entries: [], visits: [], pos: null, acc: null, posAt: 0, maps: [] };
 const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const period = (key) => theme.periods.find((p) => p.key === key);
@@ -158,11 +158,11 @@ function showSheet(redo, nodes, after) {
   sheet.redo = redo;
   destroyMaps();
   sheetBody.replaceChildren(...nodes.flat().filter((n) => n !== null && n !== undefined && n !== false));
-  sheetBody.scrollTop = 0;
   sheetEl.style.transform = '';
   sheetEl.classList.remove('small');
   sheetEl.hidden = false;
   scrim.hidden = false;
+  sheetBody.scrollTop = 0; // 表示してから戻す（非表示のあいだに戻しても効かない）
   if (after) after();
 }
 function closeSheet() {
@@ -216,7 +216,7 @@ function render() {
 // ---------- 図鑑 ----------
 function openZukan() {
   const sum = yearSummary(state.entries, state.year);
-  const prog = motifProgress(state.entries, theme);
+  const prog = questProgress(state.entries, theme);
   const now = new Date();
   const isThisYear = state.year === now.getFullYear();
   const nowKey = String(now.getMonth() + 1).padStart(2, '0');
@@ -238,8 +238,8 @@ function openZukan() {
 
   const achv = h('div', { class: 'achv' },
     h('span', {}, isThisYear ? '今年 ' : `${state.year}年 `, h('b', {}, `${sum.filled}/12`), ' か月'),
+    h('span', {}, 'お題 通算 ', h('b', {}, `${prog.count}/${prog.total}`)),
     h('span', {}, '定番 ', h('b', {}, `${cprog.count}/${cprog.total}`)),
-    h('span', {}, 'モチーフ 通算 ', h('b', {}, `${prog.count}/${prog.total}`)),
     h('span', {}, '立ち寄った店 ', h('b', {}, new Set(state.visits.map((v) => v.shopId).filter(shopOf)).size), ' 軒'));
 
   const grid = h('div', { class: 'grid' }, sum.months.map((c) => {
@@ -254,7 +254,7 @@ function openZukan() {
       kids.push(h('div', { class: 'stamp' + (c.best.verified ? ' ring' : '') }, c.count));
     } else {
       kids.push(h('div', { class: 'mo' }, p.label));
-      kids.push(h('div', { class: 'mt' }, `${p.motifs[0]}…`));
+      kids.push(h('div', { class: 'mt' }, `${p.quests[0].name}…`));
     }
     if (isThisYear && c.key === nowKey) cls.push('now');
     return h('button', { class: cls.join(' '), type: 'button', style: `--c:${p.color}`, onclick: () => openMonth(state.year, c.key, openZukan) }, kids);
@@ -311,6 +311,15 @@ function openMonth(year, key, back = closeSheet, intro = null) {
     ? h('ul', { class: 'list' }, list.map((e) => h('li', {}, recRow(e, true))))
     : h('p', { class: 'muted' }, 'まだ記録がありません');
 
+  const mq = monthQuests(state.entries, theme, year, key);
+  const questBox = h('div', { class: 'motifs', style: `--c:${p.color}` }, mq.quests.map((q) =>
+    q.kind === 'joumi'
+      ? h('div', { class: 'motif' + (q.got ? ' got' : '') }, (q.got ? '✓ ' : '') + '上生菓子',
+        q.got && q.motifName ? h('small', {}, q.motifName) : null,
+        h('span', { class: 'hint' }, '下の「上生菓子の題材」のどれかを、記録で選ぶと埋まります'))
+      : h('div', { class: 'motif' + (q.got ? ' got' : '') }, (q.got ? '✓ ' : '') + q.name,
+        h('span', { class: 'hint' }, q.hint))));
+  const mprog = motifProgress(state.entries, theme);
   const hints = theme.hints || {};
   const motifs = h('div', { class: 'motifs', style: `--c:${p.color}` }, p.motifs.map((m) =>
     h('div', { class: 'motif' + (names[m] ? ' got' : '') }, (names[m] ? '✓ ' : '') + m,
@@ -320,14 +329,15 @@ function openMonth(year, key, back = closeSheet, intro = null) {
   const howto = h('details', { class: 'howto', open: !!intro },
     h('summary', {}, 'お題の遊び方'),
     h('ul', {},
-      h('li', {}, '上生菓子は、季節の花や行事を、練り切りなどの形と色で表したお菓子です。和菓子屋は月ごとに品を入れ替えるので、その月にしか出会えない菓子があります。'),
-      h('li', {}, 'お題は、その月に和菓子屋で出会いやすい5つの題材です。'),
-      h('li', {}, '当てはまる上生菓子を見つけたら、記録するときにお題を選びます。判子が押され、5つそろうと「満願」です。'),
-      h('li', {}, '菓子の名前（菓銘）は店ごとに違います。「乱菊」「着せ綿」など名前が違っても、菊をかたどっていれば「菊」です。栗や柿のように、素材そのものがお題のこともあります。'),
+      h('li', {}, '毎月のお題は5つです。旬の素材や行事にちなんだ「季節の和菓子」が4つと、「上生菓子」の枠が1つ。5つそろうと「満願」です。'),
+      h('li', {}, '季節の和菓子は、記録した品名から自動で当てはまります（その月の記録だけ）。違うときは、記録のシートの「お題」のチップで選び直せます。'),
+      h('li', {}, '上生菓子は、季節の花や行事を、練り切りなどの形と色で表したお菓子です。その月の題材のどれかを記録で選ぶと、枠が埋まります。'),
+      h('li', {}, '菓子の名前（菓銘）は店ごとに違います。「乱菊」「着せ綿」など名前が違っても、菊をかたどっていれば「菊」です。栗や柿のように、素材そのものが題材のこともあります。'),
       h('li', {}, '月が替わるとお題も替わります。前の月の分は、図鑑の「季節」で振り返れます。'),
       h('li', {}, 'お題に合うかどうかは、自分で決めて大丈夫です。')));
 
-  showSheet(() => openMonth(year, key, back), [bar, howto, h('h3', {}, '記録'), recs, h('h3', { style: 'margin-bottom:8px' }, 'モチーフ'), motifs].filter(Boolean));
+  showSheet(() => openMonth(year, key, back), [bar, howto, h('h3', { style: 'margin-bottom:8px' }, `お題 ${mq.count}/${mq.total}`), questBox, h('h3', {}, '記録'), recs,
+    h('h3', { style: 'margin-bottom:8px' }, `上生菓子の題材（通算 ${mprog.count}/${mprog.total}）`), motifs].filter(Boolean));
 }
 
 // 記録1件の行。withDelete なら削除ボタン付き
@@ -779,13 +789,13 @@ function drawNear(best) {
 }
 
 // ---------- 今月のお題（スタンプラリーのカード） ----------
-// popName：いま埋まったモチーフ。その空欄だけ「ポン」と押す
+// popName：いま埋まった枠の key。その空欄だけ「ポン」と押す
 function drawQuest(popName = null) {
   const now = new Date();
   const key = String(now.getMonth() + 1).padStart(2, '0');
   const year = now.getFullYear();
   const p = period(key);
-  const q = monthMotifs(state.entries, theme, year, key);
+  const q = monthQuests(state.entries, theme, year, key);
   questEl.style.setProperty('--c', p.color);
   questEl.onclick = () => {
     let intro = null;
@@ -800,9 +810,9 @@ function drawQuest(popName = null) {
       h('b', { class: 'qtitle' }, `${p.label}のお題`),
       q.done ? h('span', { class: 'manganji' }, '満願') : null,
       h('span', { class: 'qcount' }, `${q.count}/${q.total}`)),
-    h('div', { class: 'slots' }, q.motifs.map((m) =>
-      h('div', { class: 'slot' + (m.got ? ' got' : '') + (m.photoId ? ' photo' : '') + (m.name === popName ? ' pop' : '') },
-        h('div', { class: 'dot' }, m.photoId ? imgFor(m.photoId, '') : m.got ? [...m.name][0] : null),
+    h('div', { class: 'slots' }, q.quests.map((m) =>
+      h('div', { class: 'slot' + (m.got ? ' got' : '') + (m.photoId ? ' photo' : '') + (m.key === popName ? ' pop' : '') },
+        h('div', { class: 'dot' }, m.photoId ? imgFor(m.photoId, '') : m.got ? m.glyph : null),
         m.got ? null : h('small', {}, m.name)))));
 }
 
@@ -863,7 +873,7 @@ function drawMinis(mini) {
 
 // ---------- 記録する ----------
 function buildRecord() {
-  const f = { file: null, previewUrl: null, newPoint: null, classic: undefined, picking: false };
+  const f = { file: null, previewUrl: null, newPoint: null, classic: undefined, picking: false, quest: undefined, pickingQuest: false };
   let pickMap = null;
   let pickMarker = null;
 
@@ -922,6 +932,31 @@ function buildRecord() {
   }
   sweet.addEventListener('input', renderClassic);
 
+  // お題：記録の日付の月の季節の和菓子から自動（f.quest が undefined）か、手で選んだ値（null＝お題ではない）
+  const questBox = h('div', { class: 'classicBox' });
+  const questMonth = () => monthKeyOf(dateIn.value || todayStr());
+  const monthQuestList = () => (period(questMonth()).quests || []);
+  const currentQuest = () => {
+    if (f.quest !== undefined && (f.quest === null || monthQuestList().some((x) => x.key === f.quest))) return f.quest;
+    return classifyQuest(sweet.value, theme, questMonth());
+  };
+  function renderQuest() {
+    const cur = currentQuest();
+    const list = monthQuestList();
+    const c = cur ? list.find((x) => x.key === cur) : null;
+    const label = c ? `お題：${c.name}` : (f.quest === null ? 'お題：なし' : 'お題：—（選ぶ）');
+    const col = period(questMonth()).color;
+    const nodes = [h('button', { class: 'chip classicChip' + (c ? ' on' : ''), type: 'button', style: `--c:${col}`, onclick: () => { f.pickingQuest = !f.pickingQuest; renderQuest(); } }, label)];
+    if (f.pickingQuest) {
+      const pick = (v) => { f.quest = v; f.pickingQuest = false; renderQuest(); };
+      nodes.push(h('div', { class: 'chips classicList' },
+        list.map((x) => h('button', { class: 'chip' + (cur === x.key ? ' on' : ''), type: 'button', style: `--c:${col}`, onclick: () => pick(x.key) }, x.name)),
+        h('button', { class: 'chip' + (f.quest === null ? ' on' : ''), type: 'button', style: '--c:#7f8b99', onclick: () => pick(null) }, 'お題ではない')));
+    }
+    questBox.replaceChildren(...nodes);
+  }
+  sweet.addEventListener('input', renderQuest);
+
   const monthPeriod = () => period(monthKeyOf(dateIn.value || todayStr()));
   function renderChips() {
     const p = monthPeriod();
@@ -932,7 +967,7 @@ function buildRecord() {
       }, m)));
   }
   motifIn.addEventListener('input', renderChips);
-  dateIn.addEventListener('change', renderChips);
+  dateIn.addEventListener('change', () => { renderChips(); renderQuest(); });
 
   // 点数は、スライダーを動かしたときだけ付ける（触らなければ「点数なし」）
   function syncScore() {
@@ -989,12 +1024,12 @@ function buildRecord() {
 
   function reset() {
     setFile(null);
-    sweet.value = ''; f.classic = undefined; f.picking = false; renderClassic(); motifIn.value = ''; note.value = ''; newName.value = '';
+    sweet.value = ''; f.classic = undefined; f.picking = false; f.quest = undefined; f.pickingQuest = false; renderClassic(); motifIn.value = ''; note.value = ''; newName.value = '';
     dateIn.value = todayStr();
     noScore.checked = true; range.value = 30;
     f.newPoint = null;
     shopSel.value = '';
-    syncScore(); renderChips();
+    syncScore(); renderChips(); renderQuest();
   }
 
   save.addEventListener('click', async () => {
@@ -1025,23 +1060,26 @@ function buildRecord() {
         id: db.newId(), date: dateIn.value, shopId: shop ? shop.id : null, sweetName,
         motif: canonicalMotif(motifIn.value, theme),
         score: noScore.checked ? null : clampScore(Number(range.value) / 10),
-        classic: f.classic !== undefined ? f.classic : classifyClassic(sweetName, theme),
+        // 定番・お題は、手で選んだときだけ記録に書く（自動のときは書かず、読むたびに品名から当てはめる）
+        classic: f.classic,
+        quest: f.quest !== undefined && (f.quest === null || monthQuestList().some((x) => x.key === f.quest)) ? f.quest : undefined,
         note: note.value.trim(), photoId, verified: isVerified(pos, shop), createdAt: Date.now(),
       };
       await db.put('entries', entry);
       const key = monthKeyOf(entry.date);
-      const classicWas = entry.classic ? classicProgress(state.entries, theme).classics.find((c) => c.key === entry.classic) : null;
+      const classicKey = classicOf(entry, theme);
+      const classicWas = classicKey ? classicProgress(state.entries, theme).classics.find((c) => c.key === classicKey) : null;
       const classicNew = !!(classicWas && classicWas.count === 0);
-      const wasGot = monthMotifs(state.entries, theme, yearOf(entry.date), key).motifs.some((m) => m.name === entry.motif && m.got);
+      const gotBefore = new Set(monthQuests(state.entries, theme, yearOf(entry.date), key).quests.filter((m) => m.got).map((m) => m.key));
       await loadData();
       reset();
       closeSheet();
       drawMap();
       const now = new Date();
       const inThisMonth = yearOf(entry.date) === now.getFullYear() && key === String(now.getMonth() + 1).padStart(2, '0');
-      const isMotif = period(key).motifs.includes(entry.motif);
+      const newly = monthQuests(state.entries, theme, yearOf(entry.date), key).quests.find((m) => m.got && !gotBefore.has(m.key));
       if (!inThisMonth) drawQuest();
-      await celebrate(shop, inThisMonth && isMotif && !wasGot ? entry.motif : null);
+      await celebrate(shop, inThisMonth && newly ? newly.key : null);
       if (classicNew) {
         const cp = classicProgress(state.entries, theme);
         toast(`定番図鑑に『${classicWas.name}』が入りました（${cp.count}/${cp.total}）`);
@@ -1060,10 +1098,10 @@ function buildRecord() {
       h('button', { class: 'btn', type: 'button', onclick: () => cam.click() }, 'カメラで撮る'),
       h('button', { class: 'btn', type: 'button', onclick: () => album.click() }, 'アルバムから'),
       preview, clearPhoto), cam, album),
-    h('div', { class: 'f' }, h('label', { class: 'f' }, '品名（必須）', sweet), classicBox),
+    h('div', { class: 'f' }, h('label', { class: 'f' }, '品名（必須）', sweet), classicBox, questBox),
     h('label', { class: 'f' }, '店', shopSel), newBox,
     h('label', { class: 'f' }, '日付', dateIn),
-    h('div', { class: 'f' }, h('label', { class: 'f' }, '今月のお題（上生菓子のとき）', motifIn), chips),
+    h('div', { class: 'f' }, h('label', { class: 'f' }, '上生菓子の題材（上生菓子のとき）', motifIn), chips),
     h('div', { class: 'f' }, '点数（0.0〜5.0）', scoreBox),
     h('label', { class: 'f' }, '感想', note),
     save);
@@ -1123,7 +1161,7 @@ function openSettings() {
         '（ODbL）。名前から和菓子屋らしい店を選んでいるので、違う店や抜けがあります。')),
     h('div', { class: 'setrow' },
       h('h3', {}, 'このアプリについて'),
-      h('p', { class: 'sub' }, '菓暦（かれき）は、上生菓子や、どら焼きなど定番の和菓子を食べるたびに記録して、季節と定番の図鑑を埋めるアプリです。データはこの端末のブラウザの中にだけ保存され、外には送りません。'))]);
+      h('p', { class: 'sub' }, '菓暦（かれき）は、和菓子の図鑑です。どら焼きや大福などの定番、毎月の季節の和菓子、上生菓子を、食べるたびに記録して埋めるアプリです。データはこの端末のブラウザの中にだけ保存され、外には送りません。'))]);
 }
 
 // ---------- データを守る ----------
@@ -1189,8 +1227,8 @@ function openWelcome(done) {
   showSheet(null, [
     h('h1', { style: 'font-size:24px;margin:4px 0 10px' }, '菓暦へようこそ'),
     h('ul', { class: 'welcome' },
-      h('li', {}, '和菓子を食べたら「＋」で記録します。上生菓子は季節の図鑑に、どら焼きや大福などは定番の図鑑に入ります。'),
-      h('li', {}, '上の「今月のお題」は、その月の上生菓子の題材です。5つ集めると満願です。'),
+      h('li', {}, '和菓子を食べたら「＋」で記録します。どら焼きや大福などの定番も、季節の和菓子も、上生菓子も、和菓子の図鑑に入ります。'),
+      h('li', {}, '上の「今月のお題」は、旬や行事の季節の和菓子4つと、上生菓子の枠1つです。5つ集めると満願です。'),
       h('li', {}, '地図の点線の丸は、近くの和菓子屋です。店の50m以内で「立ち寄って判子を押す」が押せます。'),
       h('li', {}, '位置情報は、近くの店を知らせて判子を押すためだけに使います。記録も位置も、このスマホの中にだけ保存し、外には送りません。'),
       isStandalone() ? null : h('li', {}, 'ホーム画面に追加すると、アプリのように開けて、データも消えにくくなります（iPhone は Safari の共有ボタン →「ホーム画面に追加」）。')),

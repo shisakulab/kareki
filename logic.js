@@ -132,8 +132,16 @@ export function shopStamp(shop, entries, theme, visits = []) {
   const lastVisit = myVisits.reduce((m, v) => { const d = todayStr(new Date(v.at)); return d > m ? d : m; }, '');
   const latestDate = lastEntry > lastVisit ? lastEntry : lastVisit;
   const p = theme.periods.find((x) => x.key === monthKeyOf(latestDate));
-  const withMotif = st.entries.filter((e) => e.motif).reduce((m, e) => (!m || e.date > m.date ? e : m), null);
-  const text = (withMotif && withMotif.motif) || shop.name;
+  // 字：いちばん新しい「お題の季節の和菓子」か「上生菓子の題材」の判子の字。どちらもなければ店名の1文字目
+  const glyphOf = (e) => {
+    const qk = questOf(e, theme);
+    const q = qk ? theme.periods.flatMap((x) => x.quests || []).find((x) => x.key === qk) : null;
+    if (q) return q.glyph || [...q.name][0];
+    const m = canonicalMotif(e.motif, theme);
+    return m ? [...m][0] : null;
+  };
+  const marked = st.entries.filter((e) => glyphOf(e)).reduce((m, e) => (!m || e.date > m.date || (e.date === m.date && (e.createdAt || 0) > (m.createdAt || 0)) ? e : m), null);
+  const text = (marked && glyphOf(marked)) || shop.name;
   return {
     empty: false, visits: shopVisitDays(entries, visits, shop.id), color: p ? p.color : null, glyph: [...text][0] || '',
     verified: myVisits.length > 0 || st.entries.some((e) => e.verified),
@@ -363,4 +371,60 @@ export function latestPhotoId(entries) {
     if (!best || e.date > best.date || (e.date === best.date && (e.createdAt || 0) > (best.createdAt || 0))) best = e;
   }
   return best ? best.photoId : null;
+}
+
+// ---------- v1.4 季節の和菓子のお題 ----------
+// 記録の月（monthKey）のお題のうち、品名に name / aliases が含まれるものの key。長い語を優先。なければ null
+export function classifyQuest(sweetName, theme, monthKey) {
+  const t = normalizeName(sweetName);
+  const p = theme && theme.periods ? theme.periods.find((x) => x.key === monthKey) : null;
+  if (!t || !p || !p.quests) return null;
+  let best = null;
+  let bestLen = 0;
+  for (const c of p.quests) {
+    for (const w of [c.name, ...(c.aliases || [])]) {
+      const n = normalizeName(w);
+      if (n && t.includes(n) && n.length > bestLen) { best = c.key; bestLen = n.length; }
+    }
+  }
+  return best;
+}
+
+// 記録のお題：手で決めた値（null＝お題ではない）があればそれ、なければ記録の日付の月から自動で当てはめる
+export function questOf(entry, theme) {
+  return entry.quest !== undefined ? entry.quest : classifyQuest(entry.sweetName, theme, monthKeyOf(entry.date));
+}
+
+// その年・その月のお題：季節の和菓子4つ＋上生菓子の枠（kind: 'joumi'、key 'joumi'）。5つの丸の状態
+export function monthQuests(entries, theme, year, key) {
+  const p = theme.periods.find((x) => x.key === key);
+  if (!p) return { quests: [], count: 0, total: 0, done: false };
+  const inMonth = entries.filter((e) => yearOf(e.date) === year && monthKeyOf(e.date) === key);
+  const quests = (p.quests || []).map((q) => {
+    const hit = inMonth.filter((e) => questOf(e, theme) === q.key);
+    return { key: q.key, kind: 'quest', name: q.name, hint: q.hint, glyph: q.glyph || [...q.name][0], got: hit.length > 0, photoId: latestPhotoId(hit) };
+  });
+  const motifHit = inMonth.filter((e) => p.motifs.includes(canonicalMotif(e.motif, theme)));
+  const last = motifHit.reduce((m, e) => (!m || e.date > m.date || (e.date === m.date && (e.createdAt || 0) > (m.createdAt || 0)) ? e : m), null);
+  quests.push({
+    key: 'joumi', kind: 'joumi', name: '上生菓子', got: motifHit.length > 0,
+    motifName: last ? canonicalMotif(last.motif, theme) : null, photoId: latestPhotoId(motifHit),
+    glyph: last ? [...canonicalMotif(last.motif, theme)][0] : '上',
+  });
+  const count = quests.filter((q) => q.got).length;
+  return { quests, count, total: quests.length, done: count === quests.length };
+}
+
+// お題の通算：季節の和菓子48（年をまたいで1度でも）＋上生菓子の枠12（その月の題材を1つでも記録した月）
+export function questProgress(entries, theme) {
+  const all = new Set(theme.periods.flatMap((p) => (p.quests || []).map((q) => q.key)));
+  const got = new Set();
+  const months = new Set();
+  for (const e of entries) {
+    const k = questOf(e, theme);
+    if (k && all.has(k)) got.add(k);
+    const p = theme.periods.find((x) => x.key === monthKeyOf(e.date));
+    if (p && p.motifs.includes(canonicalMotif(e.motif, theme))) months.add(p.key);
+  }
+  return { count: got.size + months.size, total: all.size + theme.periods.length, quests: got.size, joumi: months.size };
 }

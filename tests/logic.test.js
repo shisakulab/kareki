@@ -389,3 +389,104 @@ test('latestPhotoId / shopStamp / monthMotifs: 判子に入れる写真', async 
   assert.equal(q.motifs.find((m) => m.name === '菊').photoId, null);
   assert.equal(q.motifs.find((m) => m.name === '柿').photoId, null);
 });
+
+// ---------- v1.4 季節の和菓子のお題 ----------
+test('テーマ: 12か月すべてに quests が4つ、key の重複なし、hint あり', () => {
+  const keys = [];
+  for (const p of theme.periods) {
+    assert.equal(p.quests.length, 4, p.key);
+    for (const q of p.quests) {
+      assert.ok(q.key.startsWith(p.key + '_'), q.key);
+      assert.ok(q.name && q.hint && Array.isArray(q.aliases), q.key);
+      keys.push(q.key);
+    }
+  }
+  assert.equal(keys.length, 48);
+  assert.equal(new Set(keys).size, 48);
+});
+
+test('classifyQuest: 月ごとの当てはめ・別名・長い語の優先', async () => {
+  const { classifyQuest } = await import('../logic.js');
+  assert.equal(classifyQuest('栗蒸し羊羹', theme, '10'), '10_kuri_mushi');
+  assert.equal(classifyQuest('栗蒸し羊羹', theme, '03'), null);
+  assert.equal(classifyQuest('おはぎ', theme, '03'), '03_botamochi');
+  assert.equal(classifyQuest('ぼたもち', theme, '09'), '09_ohagi');
+  assert.equal(classifyQuest('水無月', theme, '06'), '06_minazuki');
+  assert.equal(classifyQuest('宇治金時', theme, '07'), '07_kakigori');
+  assert.equal(classifyQuest('おしるこ', theme, '01'), '01_zenzai');
+  assert.equal(classifyQuest('イチゴ大福', theme, '02'), '02_ichigo_daifuku');
+  assert.equal(classifyQuest('', theme, '10'), null);
+  assert.equal(classifyQuest('栗饅頭', theme, '13'), null);
+  // 長い語を優先：「栗蒸し羊羹」は栗饅頭などではなく栗蒸し羊羹
+  assert.equal(classifyQuest('新栗の栗蒸しようかん', theme, '10'), '10_kuri_mushi');
+});
+
+test('questOf: 記録の日付の月で自動・手で null・手で選んだ key', async () => {
+  const { questOf } = await import('../logic.js');
+  assert.equal(questOf({ date: '2026-10-05', sweetName: '栗蒸し羊羹' }, theme), '10_kuri_mushi');
+  assert.equal(questOf({ date: '2026-03-03', sweetName: '栗蒸し羊羹' }, theme), null);
+  assert.equal(questOf({ date: '2026-10-05', sweetName: '栗蒸し羊羹', quest: null }, theme), null);
+  assert.equal(questOf({ date: '2026-10-05', sweetName: 'なにか', quest: '10_imo_yokan' }, theme), '10_imo_yokan');
+});
+
+test('monthQuests: 季節の和菓子4つ＋上生菓子の枠・写真・count・done', async () => {
+  const { monthQuests } = await import('../logic.js');
+  const es = [
+    { date: '2026-10-01', sweetName: '栗蒸し羊羹', photoId: 'p1', createdAt: 1 },
+    { date: '2026-10-05', sweetName: '栗蒸し羊羹', photoId: 'p2', createdAt: 2 },
+    { date: '2025-10-05', sweetName: '栗饅頭', photoId: 'old', createdAt: 3 },
+    { date: '2026-10-06', sweetName: '芋ようかん', photoId: null, createdAt: 4, quest: null },
+  ];
+  const r = monthQuests(es, theme, 2026, '10');
+  assert.equal(r.total, 5);
+  assert.equal(r.quests.length, 5);
+  assert.equal(r.quests[4].kind, 'joumi');
+  assert.deepEqual([r.count, r.done], [1, false]);
+  const kuri = r.quests.find((q) => q.key === '10_kuri_mushi');
+  assert.deepEqual([kuri.got, kuri.photoId], [true, 'p2']);
+  assert.equal(r.quests.find((q) => q.key === '10_imo_yokan').got, false); // 手で「お題ではない」
+  assert.equal(r.quests.find((q) => q.key === '10_kuri_manju').got, false); // 去年の記録は数えない
+  // 上生菓子の枠：その月の題材のどれか。写真は判子と同じく最新
+  const es2 = [...es,
+    { date: '2026-10-07', sweetName: '練り切り', motif: '菊', photoId: 'pj', createdAt: 5 },
+    { date: '2026-10-08', sweetName: '練り切り', motif: '自由入力', photoId: 'px', createdAt: 6 }];
+  const j = monthQuests(es2, theme, 2026, '10').quests[4];
+  assert.deepEqual([j.got, j.motifName, j.photoId], [true, '菊', 'pj']);
+  // 4つ＋上生菓子で満願
+  const all = [
+    ...theme.periods[9].quests.map((q) => ({ date: '2026-10-02', sweetName: q.name })),
+    { date: '2026-10-03', sweetName: 'x', motif: '栗' }];
+  const full = monthQuests(all, theme, 2026, '10');
+  assert.deepEqual([full.count, full.done], [5, true]);
+  assert.equal(monthQuests(es, theme, 2026, '99').total, 0);
+});
+
+test('questProgress: 通算 n/60（季節の和菓子48＋上生菓子の月12）', async () => {
+  const { questProgress } = await import('../logic.js');
+  assert.deepEqual(questProgress([], theme), { count: 0, total: 60, quests: 0, joumi: 0 });
+  const es = [
+    { date: '2026-10-05', sweetName: '栗蒸し羊羹' },
+    { date: '2025-10-05', sweetName: '栗蒸し羊羹' }, // 年が違っても同じお題は1つ
+    { date: '2026-03-03', sweetName: '栗蒸し羊羹' }, // 3月には当たらない
+    { date: '2026-10-07', sweetName: '練り切り', motif: '菊' },
+    { date: '2025-10-07', sweetName: '練り切り', motif: '栗' }, // 同じ月は1つ
+    { date: '2026-11-07', sweetName: '練り切り', motif: '菊' }, // 11月の題材ではない
+  ];
+  const r = questProgress(es, theme);
+  assert.deepEqual([r.count, r.quests, r.joumi], [2, 1, 1]);
+});
+
+test('判子の字：お題の和菓子は漢字1文字、店の判子はお題の字を優先', async () => {
+  const { monthQuests, shopStamp } = await import('../logic.js');
+  for (const p of theme.periods) {
+    const gs = p.quests.map((q) => q.glyph);
+    for (const q of p.quests) assert.ok(q.glyph && [...q.glyph].length === 1 && /\p{Script=Han}/u.test(q.glyph), `${p.key} ${q.name}`);
+    assert.equal(new Set(gs).size, gs.length, `${p.key} の字が重なっている`);
+  }
+  const es = [{ date: '2026-10-05', shopId: 's', sweetName: '栗蒸し羊羹', createdAt: 1 }];
+  const q = monthQuests(es, theme, 2026, '10');
+  assert.equal(q.quests.find((x) => x.name === '栗蒸し羊羹').glyph, '蒸');
+  assert.equal(q.quests.find((x) => x.kind === 'joumi').glyph, '上');
+  assert.equal(shopStamp({ id: 's', name: '店' }, es, theme).glyph, '蒸');
+  assert.equal(shopStamp({ id: 's', name: '店' }, [{ date: '2026-10-05', shopId: 's', sweetName: 'どら焼き', createdAt: 1 }], theme).glyph, '店');
+});
