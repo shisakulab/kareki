@@ -649,7 +649,7 @@ function openVisited(shop, n) {
   showSheet(null, [
     h('h2', { style: 'font-size:22px;text-align:center;margin:0 0 4px' }, '判子を押しました'),
     h('p', { class: 'sub', style: 'text-align:center' }, `${shop.name}（${n}回目）`),
-    h('p', { style: 'text-align:center;margin:8px 0 14px' }, '上生菓子を記録する？'),
+    h('p', { style: 'text-align:center;margin:8px 0 14px' }, '食べた和菓子を記録する？'),
     h('div', { style: 'display:flex;gap:8px;justify-content:center' },
       h('button', { class: 'btn primary', type: 'button', onclick: () => { record.setShop(shop.id); openRecord(); } }, '記録する'),
       h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'あとで')),
