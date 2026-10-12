@@ -435,6 +435,7 @@ function showCard(shop) {
     sorted.length
       ? h('ul', { class: 'list' }, sorted.map((e) => h('li', {}, recRow(e, false))))
       : h('p', { class: 'muted' }, 'まだ記録がありません'),
+    visitList(shop),
     shopLinks(shop),
     h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
       h('button', { class: 'btn primary', type: 'button', onclick: () => { record.setShop(shop.id); closeCard(); openRecord(); } }, 'ここで記録する'),
@@ -443,6 +444,17 @@ function showCard(shop) {
       shop.osmId ? null : h('button', { class: 'btn', type: 'button', onclick: () => deleteShop(shop) }, '店を消す'),
       h('button', { class: 'btn', type: 'button', onclick: closeCard }, '閉じる')));
   document.body.append(card);
+}
+
+// 店のカードに出す、立ち寄りの判子の一覧（新しい順）。それぞれ取り消せる
+function visitList(shop) {
+  const vs = state.visits.filter((v) => v.shopId === shop.id).sort((a, b) => b.at - a.at);
+  if (!vs.length) return null;
+  return h('div', { class: 'visits' },
+    h('p', { class: 'sub', style: 'margin:8px 0 4px' }, '立ち寄りの判子'),
+    h('ul', { class: 'list' }, vs.map((v) => h('li', { style: 'display:flex;justify-content:space-between;align-items:center;gap:8px' },
+      h('span', {}, todayStr(new Date(v.at))),
+      h('button', { class: 'linkbtn', type: 'button', onclick: () => undoVisit(v.id) }, '取り消す')))));
 }
 
 // 自分で追加した店：名前を直す・消す（記録は残し、店なしにする）
@@ -620,12 +632,13 @@ async function checkIn(target) {
       return;
     }
     const shop = registeredOf(target) || await registerOsm(target);
-    await db.put('visits', { id: db.newId(), shopId: shop.id, at: Date.now(), lat: pos.lat, lng: pos.lng });
+    const visitId = db.newId();
+    await db.put('visits', { id: visitId, shopId: shop.id, at: Date.now(), lat: pos.lat, lng: pos.lng });
     await loadData();
     closeCard();
     drawMap();
     await celebrate(shop, null);
-    openVisited(shop, shopVisitDays(state.entries, state.visits, shop.id));
+    openVisited(shop, shopVisitDays(state.entries, state.visits, shop.id), visitId);
     updateNear();
   } catch (err) {
     toast('保存できませんでした：' + (err && err.message ? err.message : err));
@@ -635,7 +648,7 @@ async function checkIn(target) {
 }
 
 // 判子を押したあとの小さなシート
-function openVisited(shop, n) {
+function openVisited(shop, n, visitId) {
   showSheet(null, [
     h('h2', { style: 'font-size:22px;text-align:center;margin:0 0 4px' }, '判子を押しました'),
     h('p', { class: 'sub', style: 'text-align:center' }, `${shop.name}（${n}回目）`),
@@ -643,7 +656,28 @@ function openVisited(shop, n) {
     h('div', { style: 'display:flex;gap:8px;justify-content:center' },
       h('button', { class: 'btn primary', type: 'button', onclick: () => { record.setShop(shop.id); openRecord(); } }, '記録する'),
       h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'あとで')),
+    visitId ? h('p', { style: 'text-align:center;margin:12px 0 0' },
+      h('button', { class: 'linkbtn', type: 'button', onclick: async () => { closeSheet(); await undoVisit(visitId, false); } }, '間違えて押した（取り消す）')) : null,
   ], () => sheetEl.classList.add('small'));
+}
+
+// 立ち寄りの判子を取り消す。OSM の店で、ほかに立ち寄りも記録もなくなったら、登録も外す（地図では未訪問の店に戻る）
+async function undoVisit(visitId, ask = true) {
+  const v = state.visits.find((x) => x.id === visitId);
+  if (!v) return;
+  const shop = shopOf(v.shopId);
+  const day = todayStr(new Date(v.at));
+  if (ask && !confirm(`${shop ? `「${shop.name}」の` : ''}${day} の判子を取り消しますか？`)) return;
+  await db.remove('visits', visitId);
+  if (shop && shop.osmId
+    && !state.visits.some((x) => x.id !== visitId && x.shopId === shop.id)
+    && !state.entries.some((e) => e.shopId === shop.id)) await db.remove('shops', shop.id);
+  await loadData();
+  closeCard();
+  drawMap();
+  render();
+  updateNear();
+  toast('判子を取り消しました');
 }
 
 // ---------- 近づいたら知らせる（開いているあいだだけ位置を追う） ----------

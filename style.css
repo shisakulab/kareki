@@ -54,6 +54,7 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 600; margin: 0; }
 }
 .btn.primary { background: var(--ink); color: var(--paper); }
 .btn.danger { border-color: #b3382c; color: #b3382c; }
+.linkbtn { background: none; border: 0; padding: 4px 2px; font: inherit; font-size: 13px; color: var(--ink); opacity: .7; text-decoration: underline; cursor: pointer; }
 .muted { color: var(--ink2); font-size: 14px; }
 .sub { font-size: 14px; color: var(--ink2); margin: 0 0 8px; }
 
