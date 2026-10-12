@@ -11,7 +11,7 @@ import { isWagashiShop, tileKey, shopInfo } from '../logic.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CACHE = path.join(root, 'tools', '.cache', 'overpass-jp.json');
 const OUT = path.join(root, 'data', 'shops');
-const ENDPOINT = 'https://overpass-api.de/api/interpreter';
+const ENDPOINT = process.env.OVERPASS_URL || 'https://overpass-api.de/api/interpreter';
 const HEADERS = {
   'User-Agent': 'kareki-build-shops/1.3 (https://github.com/shisakulab/kareki)',
   Accept: 'application/json',
@@ -19,11 +19,14 @@ const HEADERS = {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const YAKI = "たい焼|たいやき|鯛焼|今川焼|大判焼|回転焼|御座候";
 const queryAll = `[out:json][timeout:900];
 area["ISO3166-1"="JP"]->.jp;
 (
   nwr["shop"="confectionery"](area.jp);
   nwr["amenity"="cafe"]["name"~"甘味"](area.jp);
+  nwr["amenity"~"^(fast_food|cafe)$"]["name"~"${YAKI}"](area.jp);
+  nwr["shop"="bakery"]["name"~"${YAKI}"](area.jp);
 );
 out center tags;`;
 
@@ -38,6 +41,8 @@ const queryRegion = ([s, w, n, e]) => `[out:json][timeout:600];
 (
   nwr["shop"="confectionery"](${s},${w},${n},${e});
   nwr["amenity"="cafe"]["name"~"甘味"](${s},${w},${n},${e});
+  nwr["amenity"~"^(fast_food|cafe)$"]["name"~"${YAKI}"](${s},${w},${n},${e});
+  nwr["shop"="bakery"]["name"~"${YAKI}"](${s},${w},${n},${e});
 );
 out center tags;`;
 

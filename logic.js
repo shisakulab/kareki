@@ -150,9 +150,11 @@ const WESTERN_WORDS = [
   'マカロン', 'タルト', 'パンケーキ', 'ベーカリー', 'ジェラート', 'アイスクリーム', 'クッキー', 'キャンディ', 'ホットケーキ', '駄菓子', 'まちおか', 'コージーコーナー', 'シャトレーゼ', '不二家',
   'patisserie', 'patissier', 'pâtisserie', 'cake', 'chocolat', 'chocolate', 'bakery', 'donut', 'crepe', 'macaron', 'sweets',
 ];
+// 名前にこの語を含む fast_food・cafe・bakery は、たい焼き屋などとして拾う（チェーンのファストフードは拾わない）
+const YAKI_WORDS = ['たい焼', 'たいやき', '鯛焼', '今川焼', '大判焼', '回転焼', '御座候'];
 const nameOf = (tags) => String((tags && (tags.name || tags['name:ja'])) || '').normalize('NFKC').trim();
 
-// OSM のタグから、和菓子屋らしいか。shop=confectionery か、名前に「甘味」を含む amenity=cafe だけが対象
+// OSM のタグから、和菓子屋らしいか。shop=confectionery か、名前に「甘味」を含む amenity=cafe、名前にたい焼き等の語を含む fast_food・cafe・bakery が対象
 export function isWagashiShop(tags) {
   if (!tags) return false;
   const name = nameOf(tags);
@@ -167,7 +169,9 @@ export function isWagashiShop(tags) {
     const head = name.split(/[\s　（(]/)[0];
     return /^[\p{Script=Han}\p{Script=Hiragana}々ー]{2,}(屋|や|堂|庵|舗|家)$/u.test(head);
   }
-  if (tags.amenity === 'cafe') {
+  if (['fast_food', 'cafe'].includes(tags.amenity) || tags.shop === 'bakery') {
+    if (YAKI_WORDS.some((w) => name.includes(w))) return true;
+    if (tags.amenity !== 'cafe') return false;
     if (WESTERN_WORDS.some((w) => lower.includes(w.toLowerCase()))) return false;
     return name.includes('甘味');
   }

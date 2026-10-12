@@ -432,3 +432,14 @@ test('判子の字：お題の和菓子は漢字1文字、店の判子はお題�
   assert.equal(shopStamp({ id: 's', name: '店' }, es, theme).glyph, '蒸');
   assert.equal(shopStamp({ id: 's', name: '店' }, [{ date: '2026-10-05', shopId: 's', sweetName: 'どら焼き', createdAt: 1 }], theme).glyph, '店');
 });
+
+test('isWagashiShop: 名前にたい焼き等の語を含む fast_food・cafe・bakery を拾う', () => {
+  assert.equal(isWagashiShop({ amenity: 'fast_food', name: '浅草たい焼 花子' }), true);
+  assert.equal(isWagashiShop({ amenity: 'fast_food', name: '鯛焼き屋' }), true);
+  assert.equal(isWagashiShop({ amenity: 'cafe', name: '今川焼 まるや' }), true);
+  assert.equal(isWagashiShop({ shop: 'bakery', name: '御座候 駅前店' }), true);
+  assert.equal(isWagashiShop({ amenity: 'fast_food', name: 'マクドナルド' }), false);
+  assert.equal(isWagashiShop({ amenity: 'fast_food' }), false);
+  assert.equal(isWagashiShop({ shop: 'bakery', name: 'パン工房' }), false);
+  assert.equal(isWagashiShop({ amenity: 'restaurant', name: 'たい焼き食堂' }), false);
+});
